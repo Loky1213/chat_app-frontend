@@ -3,7 +3,16 @@ import { useChatStore } from '@/store/useChatStore';
 import { Message } from '@/types/chat';
 
 export const useChatWebSocket = (conversationId: string | null) => {
-  const { addMessage, addReadReceipt, setSocket } = useChatStore();
+  const { 
+    addMessage, 
+    addReadReceipt,
+    updateMessage,
+    removeMessage,
+    setOnline,
+    setOffline,
+    setTyping,
+    setSocket 
+  } = useChatStore();
   const ws = useRef<WebSocket | null>(null);
 
   const getWsUrl = (id: string) => {
@@ -45,12 +54,44 @@ export const useChatWebSocket = (conversationId: string | null) => {
       socket.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
-          if (data.type === 'message') {
-            const newMessage: Message = data.data;
-            addMessage(newMessage);
-          } else if (data.type === 'read_receipt') {
-            const userIdMapping = Number(data.user_id);
-            addReadReceipt(userIdMapping);
+          
+          switch (data.type) {
+            case 'message': {
+              const newMessage: Message = data.data;
+              addMessage(newMessage);
+              break;
+            }
+            case 'read_receipt': // legacy handling, depending on backend implementation
+            case 'message_seen': {
+              const userIdMapping = Number(data.user_id);
+              addReadReceipt(userIdMapping, data.message_id);
+              break;
+            }
+            case 'user_online': {
+              setOnline(Number(data.user_id));
+              break;
+            }
+            case 'user_offline': {
+              setOffline(Number(data.user_id));
+              break;
+            }
+            case 'message_deleted': {
+              if (data.mode === 'me') {
+                removeMessage(data.message_id);
+              } else {
+                updateMessage(data.message_id, {
+                  is_deleted: true,
+                  deleted_for_everyone: true,
+                  content: 'This message was deleted',
+                  message_type: 'deleted'
+                });
+              }
+              break;
+            }
+            case 'typing': {
+              setTyping(Number(data.user_id));
+              break;
+            }
           }
         } catch (err) {
           console.error('Error parsing WS message:', err);
@@ -84,7 +125,7 @@ export const useChatWebSocket = (conversationId: string | null) => {
         setSocket(null);
       }
     };
-  }, [conversationId, addMessage, addReadReceipt, setSocket]);
+  }, [conversationId, addMessage, addReadReceipt, updateMessage, removeMessage, setOnline, setOffline, setTyping, setSocket]);
 
   const sendMessage = useCallback((content: string) => {
     if (ws.current && ws.current.readyState === WebSocket.OPEN) {
@@ -98,13 +139,32 @@ export const useChatWebSocket = (conversationId: string | null) => {
     }
   }, []);
 
-  const sendReadReceipt = useCallback(() => {
+  const sendDeleteMessage = useCallback((messageId: string, mode: 'me' | 'everyone') => {
     if (ws.current && ws.current.readyState === WebSocket.OPEN) {
       ws.current.send(JSON.stringify({
-        action: 'mark_read'
+        action: 'delete_message',
+        message_id: messageId,
+        mode
       }));
     }
   }, []);
 
-  return { sendMessage, sendReadReceipt, socketReadyState: ws.current?.readyState };
+  const sendTyping = useCallback(() => {
+    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+      ws.current.send(JSON.stringify({
+        action: 'typing'
+      }));
+    }
+  }, []);
+
+  const sendReadReceipt = useCallback((messageId?: string) => {
+    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+      ws.current.send(JSON.stringify({
+        action: 'mark_read',
+        ...(messageId ? { message_id: messageId } : {})
+      }));
+    }
+  }, []);
+
+  return { sendMessage, sendDeleteMessage, sendTyping, sendReadReceipt, socketReadyState: ws.current?.readyState };
 };

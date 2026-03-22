@@ -1,14 +1,19 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { useChatWebSocket } from '@/hooks/useChatWebSocket';
 import { useChatStore } from '@/store/useChatStore';
 import { SendHorizontal } from 'lucide-react';
 
-export const MessageInput = () => {
+interface MessageInputProps {
+  sendMessage: (content: string) => void;
+  sendTyping: () => void;
+}
+
+export const MessageInput = ({ sendMessage, sendTyping }: MessageInputProps) => {
   const [content, setContent] = useState('');
   const { activeConversationId } = useChatStore();
-  const { sendMessage } = useChatWebSocket(activeConversationId);
+  const lastTypingTime = useRef<number>(0);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -18,6 +23,17 @@ export const MessageInput = () => {
     setContent('');
   };
 
+  const handleTyping = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setContent(e.target.value);
+    
+    // Throttle typing events to once every 3 seconds
+    const now = Date.now();
+    if (now - lastTypingTime.current > 3000) {
+      sendTyping();
+      lastTypingTime.current = now;
+    }
+  };
+
   if (!activeConversationId) return null;
 
   return (
@@ -25,7 +41,7 @@ export const MessageInput = () => {
       <input
         type="text"
         value={content}
-        onChange={(e) => setContent(e.target.value)}
+        onChange={handleTyping}
         placeholder="Type a message..."
         className="flex-1 bg-gray-100 border-transparent focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-200 rounded-full px-4 py-2 text-sm outline-none transition-all"
       />

@@ -32,5 +32,31 @@ export const chatApi = {
     const res = await apiClient.post('/api/chat/private/create/', { user_id: userId });
     // Assuming backend returns { success: true, data: { conversation_id: "..." } }
     return res.data.data;
+  },
+
+  // Group Management APIs
+  createGroupChat: async (name: string, userIds: number[]): Promise<{ conversation_id: string }> => {
+    const res = await apiClient.post('/api/chat/group/create/', { name, user_ids: userIds });
+    return res.data.data || res.data;
+  },
+
+  addMembers: async (conversationId: string, userIds: number[]) => {
+    const res = await apiClient.post(`/api/chat/conversations/${conversationId}/add-members/`, { user_ids: userIds });
+    return res.data;
+  },
+
+  removeMember: async (conversationId: string, userId: number) => {
+    const res = await apiClient.delete(`/api/chat/conversations/${conversationId}/remove-member/${userId}/`);
+    return res.data;
+  },
+
+  promoteAdmin: async (conversationId: string, userId: number) => {
+    const res = await apiClient.post(`/api/chat/conversations/${conversationId}/promote-admin/`, { user_id: userId });
+    return res.data;
+  },
+
+  removeAdmin: async (conversationId: string, userId: number) => {
+    const res = await apiClient.post(`/api/chat/conversations/${conversationId}/remove-admin/`, { user_id: userId });
+    return res.data;
   }
 };

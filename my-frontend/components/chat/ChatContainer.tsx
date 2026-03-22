@@ -7,11 +7,18 @@ import { chatApi } from '@/services/api/chat';
 import { ConversationList } from './ConversationList';
 import { MessageList } from './MessageList';
 import { MessageInput } from './MessageInput';
+import { GroupManagement } from './GroupManagement';
 import { useChatWebSocket } from '@/hooks/useChatWebSocket';
 import { useAuth } from '@/context/AuthContext';
+import { Info } from 'lucide-react';
 
 export const ChatContainer = () => {
-  const { setConversations, activeConversationId, setMessages } = useChatStore();
+  const { conversations, setConversations, activeConversationId, setMessages } = useChatStore();
+  const [showGroupInfo, setShowGroupInfo] = useState(false);
+  const { user: currentUser } = useAuth();
+  const { sendMessage, sendDeleteMessage, sendTyping, sendReadReceipt } = useChatWebSocket(activeConversationId);
+
+  const activeConversation = conversations.find(c => c.id === activeConversationId);
 
   // Initialize Conversation List
   useEffect(() => {
@@ -52,8 +59,33 @@ export const ChatContainer = () => {
 
       {/* Main Chat Area */}
       <div className="flex-1 flex flex-col min-w-0 bg-white shadow-xl z-10 relative border-l border-gray-200">
-        <MessageList />
-        <MessageInput />
+        {activeConversation && (
+          <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-white shadow-sm z-10">
+            <div>
+              <h2 className="font-bold text-gray-800 text-lg">
+                {activeConversation.name || activeConversation.participants.filter(p => String(p.id) !== String(currentUser?.id)).map(p => p.username).join(', ') || 'Chat'}
+              </h2>
+              {activeConversation.participants.length > 2 && (
+                <div className="text-xs text-gray-500">{activeConversation.participants.length} participants</div>
+              )}
+            </div>
+            {/* Show Info button ONLY for group chats */}
+            {(activeConversation.participants.length > 2 || activeConversation.name) && (
+              <button 
+                onClick={() => setShowGroupInfo(true)}
+                className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-colors"
+                title="Group Info"
+              >
+                <Info size={20} />
+              </button>
+            )}
+          </div>
+        )}
+
+        <MessageList sendReadReceipt={sendReadReceipt} sendDeleteMessage={sendDeleteMessage} />
+        <MessageInput sendMessage={sendMessage} sendTyping={sendTyping} />
+
+        {showGroupInfo && <GroupManagement onClose={() => setShowGroupInfo(false)} />}
       </div>
     </div>
   );

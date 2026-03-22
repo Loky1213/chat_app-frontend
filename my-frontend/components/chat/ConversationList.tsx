@@ -6,9 +6,10 @@ import { chatApi } from '@/services/api/chat';
 import { User, Conversation } from '@/types/chat';
 import { Users, MessageSquarePlus, MessageSquare } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
+import { CreateGroupModal } from './CreateGroupModal';
 
 export const ConversationList = () => {
-  const { conversations, activeConversationId, setActiveConversationId, setConversations } = useChatStore();
+  const { conversations, activeConversationId, setActiveConversationId, setConversations, onlineUsers } = useChatStore();
   const { user: currentUser } = useAuth();
   
   // Local state to toggle between viewing "conversations" or "contacts"
@@ -17,6 +18,7 @@ export const ConversationList = () => {
   // Local state for contacts list
   const [contacts, setContacts] = useState<User[]>([]);
   const [loadingContacts, setLoadingContacts] = useState(false);
+  const [showCreateGroup, setShowCreateGroup] = useState(false);
 
   const getChatDisplayName = (conversation: Conversation) => {
     if (conversation.name) return conversation.name;
@@ -25,6 +27,17 @@ export const ConversationList = () => {
 
     const others = conversation.participants.filter(p => String(p.id) !== String(currentUser.id));
     return others.length > 0 ? others.map(p => p.username).join(', ') : "Just You";
+  };
+
+  const isConversationOnline = (conversation: Conversation) => {
+    if (!currentUser) return false;
+    // For 1-on-1 chats, check if the other participant is online
+    if (conversation.participants.length <= 2) {
+      const other = conversation.participants.find(p => String(p.id) !== String(currentUser.id));
+      return other ? onlineUsers.includes(other.id) : false;
+    }
+    // For group chats, maybe check if any other participant is online, or ignore
+    return false;
   };
 
   // Fetch contacts when switching to the 'contacts' view
@@ -74,14 +87,25 @@ export const ConversationList = () => {
           {view === 'conversations' ? 'Chats' : 'New Chat'}
         </h2>
         
-        {/* Toggle Button */}
-        <button 
-          onClick={() => setView(view === 'conversations' ? 'contacts' : 'conversations')}
-          className="p-2 rounded-full hover:bg-gray-200 transition-colors text-gray-600"
-          title={view === 'conversations' ? "Start New Chat" : "Back to Chats"}
-        >
-          {view === 'conversations' ? <MessageSquarePlus size={20} /> : <MessageSquare size={20} />}
-        </button>
+        <div className="flex items-center gap-1">
+          {/* Create Group Button */}
+          <button 
+            onClick={() => setShowCreateGroup(true)}
+            className="p-2 rounded-full hover:bg-gray-200 transition-colors text-gray-600"
+            title="Create Group"
+          >
+            <Users size={20} />
+          </button>
+
+          {/* Toggle Button */}
+          <button 
+            onClick={() => setView(view === 'conversations' ? 'contacts' : 'conversations')}
+            className="p-2 rounded-full hover:bg-gray-200 transition-colors text-gray-600"
+            title={view === 'conversations' ? "Start New Chat" : "Back to Chats"}
+          >
+            {view === 'conversations' ? <MessageSquarePlus size={20} /> : <MessageSquare size={20} />}
+          </button>
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto">
@@ -107,8 +131,13 @@ export const ConversationList = () => {
                   }`}
                 >
                   {/* Generic Avatar Placeholder */}
-                  <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center text-white font-bold flex-shrink-0">
-                    {getChatDisplayName(conv)[0]?.toUpperCase()}
+                  <div className="relative">
+                    <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center text-white font-bold flex-shrink-0">
+                      {getChatDisplayName(conv)[0]?.toUpperCase()}
+                    </div>
+                    {isConversationOnline(conv) && (
+                      <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-white rounded-full"></div>
+                    )}
                   </div>
                   
                   <div className="flex-1 min-w-0">
@@ -154,8 +183,13 @@ export const ConversationList = () => {
                   className="cursor-pointer p-3 border-b border-gray-50 flex gap-3 transition-colors hover:bg-gray-100 items-center"
                 >
                    {/* Generic Avatar Placeholder */}
-                   <div className="w-10 h-10 rounded-full bg-gray-300 flex items-center justify-center text-gray-600 font-bold flex-shrink-0">
-                    {contact.username[0].toUpperCase()}
+                   <div className="relative">
+                     <div className="w-10 h-10 rounded-full bg-gray-300 flex items-center justify-center text-gray-600 font-bold flex-shrink-0">
+                      {contact.username[0].toUpperCase()}
+                    </div>
+                    {onlineUsers.includes(contact.id) && (
+                      <div className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-green-500 border-2 border-white rounded-full"></div>
+                    )}
                   </div>
                   <div className="flex-1">
                     <div className="font-semibold text-gray-800">{contact.username}</div>
@@ -167,6 +201,23 @@ export const ConversationList = () => {
           </div>
         )}
       </div>
+
+      {showCreateGroup && (
+        <CreateGroupModal 
+          onClose={() => setShowCreateGroup(false)}
+          onSuccess={async (conversationId) => {
+            setShowCreateGroup(false);
+            try {
+              const updatedConversations = await chatApi.getConversations();
+              setConversations(updatedConversations);
+              setActiveConversationId(conversationId);
+              setView('conversations');
+            } catch (error) {
+              console.error(error);
+            }
+          }}
+        />
+      )}
     </div>
   );
 };

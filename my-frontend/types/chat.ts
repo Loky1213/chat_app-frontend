@@ -4,6 +4,9 @@ export interface User {
   email?: string;
   first_name?: string;
   last_name?: string;
+  role?: string; // e.g., 'admin', 'member' in group context
+  is_online?: boolean; // Instantly tells us if the user is online
+  is_creator?: boolean; // Protects the creator from being demoted or removed
 }
 
 export interface Message {
@@ -13,6 +16,8 @@ export interface Message {
   sender: User;
   created_at: string;
   read_by?: number[]; // list of user ids that have read this message
+  is_deleted?: boolean;
+  deleted_for_everyone?: boolean;
 }
 
 export interface Conversation {
