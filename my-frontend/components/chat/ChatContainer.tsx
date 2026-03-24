@@ -9,29 +9,23 @@ import { MessageList } from './MessageList';
 import { MessageInput } from './MessageInput';
 import { GroupManagement } from './GroupManagement';
 import { useChatWebSocket } from '@/hooks/useChatWebSocket';
+import { useGlobalWebSocket } from '@/hooks/useGlobalWebSocket';
 import { useAuth } from '@/context/AuthContext';
 import { Info } from 'lucide-react';
 
 export const ChatContainer = () => {
-  const { conversations, setConversations, activeConversationId, setMessages } = useChatStore();
+  const { conversations, fetchConversations, activeConversationId, setMessages } = useChatStore();
   const [showGroupInfo, setShowGroupInfo] = useState(false);
   const { user: currentUser } = useAuth();
   const { sendMessage, sendDeleteMessage, sendTyping, sendReadReceipt } = useChatWebSocket(activeConversationId);
+  useGlobalWebSocket(); // Initialize global websocket connection for sidebar reordering
 
   const activeConversation = conversations.find(c => c.id === activeConversationId);
 
   // Initialize Conversation List
   useEffect(() => {
-    const fetchConversations = async () => {
-      try {
-        const data = await chatApi.getConversations();
-        setConversations(data);
-      } catch (error) {
-        console.error('Failed to load conversations:', error);
-      }
-    };
     fetchConversations();
-  }, [setConversations]);
+  }, [fetchConversations]);
 
   // Load Messages when Active Conversation Changes
   useEffect(() => {

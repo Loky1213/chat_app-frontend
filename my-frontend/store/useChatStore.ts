@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { Conversation, Message } from '@/types/chat';
+import { chatApi } from '@/services/api/chat';
 
 interface ChatState {
   conversations: Conversation[];
@@ -22,9 +23,12 @@ interface ChatState {
   setTyping: (userId: number) => void;
   setSocket: (socket: WebSocket | null) => void;
   resetChat: () => void;
+  fetchConversations: () => Promise<void>;
+  fetchMessages: (conversationId: string) => Promise<void>;
+  handleGlobalNewMessage: (payload: any) => void;
 }
 
-export const useChatStore = create<ChatState>((set) => ({
+export const useChatStore = create<ChatState>((set, get) => ({
   conversations: [],
   activeConversationId: null,
   messages: [],
@@ -69,18 +73,21 @@ export const useChatStore = create<ChatState>((set) => ({
   })),
   
   setMessages: (messages) => set((state) => {
-    // Also patch the snippet in the sidebar for the active chat
+    // Use Map to ensure absolute duplicate prevention from multiple sources
+    const uniqueMessagesMap = new Map();
+    messages.forEach(m => uniqueMessagesMap.set(String(m.id), m));
+    const uniqueMessages = Array.from(uniqueMessagesMap.values());
+
     const updatedConversations = state.conversations.map(conv => {
       if (String(conv.id) === String(state.activeConversationId)) {
         return {
           ...conv,
-          last_message: messages.length > 0 ? messages[messages.length - 1] : conv.last_message,
+          last_message: uniqueMessages.length > 0 ? uniqueMessages[uniqueMessages.length - 1] : conv.last_message,
         };
       }
       return conv;
     });
     
-    // Dynamically Re-sort so active conversations instantly jump to the top
     updatedConversations.sort((a, b) => {
       const timeA = a.last_message?.created_at ? new Date(a.last_message.created_at).getTime() : 0;
       const timeB = b.last_message?.created_at ? new Date(b.last_message.created_at).getTime() : 0;
@@ -88,41 +95,22 @@ export const useChatStore = create<ChatState>((set) => ({
     });
 
     return {
-      messages,
+      messages: uniqueMessages,
       conversations: updatedConversations
     };
   }),
   
   addMessage: (newMessage) => set((state) => {
     // Prevent duplicate messages
-    if (state.messages.some(m => m.id === newMessage.id)) {
+    if (state.messages.some(m => String(m.id) === String(newMessage.id))) {
       return state;
     }
 
-    // Update the conversation's last_message in the sidebar
-    const updatedConversations = state.conversations.map(conv => {
-      // Determine if the message belongs to this conversation
-      // We assume if it's the active chat, it goes there. Otherwise we'd need conversation_id on the message.
-      // Use String() mapping to avoid number vs string type equality mismatches
-      if (String(conv.id) === String(state.activeConversationId)) {
-        return {
-          ...conv,
-          last_message: newMessage, // Assuming structural compatibility
-        };
-      }
-      return conv;
-    });
-
-    // Dynamically Re-sort so active conversations instantly jump to the top
-    updatedConversations.sort((a, b) => {
-      const timeA = a.last_message?.created_at ? new Date(a.last_message.created_at).getTime() : 0;
-      const timeB = b.last_message?.created_at ? new Date(b.last_message.created_at).getTime() : 0;
-      return timeB - timeA;
-    });
+    const updatedMessages = [...state.messages, newMessage]
+      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
 
     return { 
-      messages: [...state.messages, newMessage],
-      conversations: updatedConversations
+      messages: updatedMessages 
     };
   }),
 
@@ -190,5 +178,74 @@ export const useChatStore = create<ChatState>((set) => ({
     onlineUsers: [],
     typingUsers: {},
     socket: null 
+  }),
+
+  fetchConversations: async () => {
+    try {
+      const data = await chatApi.getConversations();
+      get().setConversations(data);
+    } catch (error) {
+      console.error('Failed to load conversations:', error);
+    }
+  },
+
+  fetchMessages: async (conversationId: string) => {
+    try {
+      const data = await chatApi.getMessages(conversationId);
+      const messagesArray = Array.isArray(data) ? data : [];
+      get().setMessages([...messagesArray].reverse());
+    } catch (error) {
+      console.error('Failed to load messages:', error);
+    }
+  },
+
+  handleGlobalNewMessage: (payload) => set((state) => {
+    // 1. Enforce strict payload contract
+    if (!payload.last_message) return state; // Ignore event if missing
+
+    let conversationExists = false;
+    const updatedConversations = state.conversations.map(conv => {
+      if (String(conv.id) === String(payload.conversation_id)) {
+        conversationExists = true;
+        const isActiveChat = String(conv.id) === String(state.activeConversationId);
+        
+        const incomingTime = new Date(payload.last_message.created_at).getTime();
+        const existingTime = conv.last_message ? new Date(conv.last_message.created_at).getTime() : 0;
+        
+        // 5. Ensure last_message consistency: Only update if incoming message is newer or equal
+        if (incomingTime < existingTime) {
+          return conv; 
+        }
+
+        // Use ONLY payload.last_message
+        const newLastMessage = payload.last_message;
+        
+        // 3. Fix unread count edge cases: always 0 if active chat, no visibility check
+        const newUnreadCount = isActiveChat 
+          ? 0 
+          : (payload.unread_count !== undefined ? payload.unread_count : conv.unread_count);
+
+        return {
+          ...conv,
+          last_message: newLastMessage,
+          unread_count: newUnreadCount,
+        };
+      }
+      return conv;
+    });
+
+    if (!conversationExists) {
+        // Asynchronously fetch missing conversations
+        setTimeout(() => get().fetchConversations(), 0);
+        return state;
+    }
+
+    updatedConversations.sort((a, b) => {
+      const timeA = a.last_message?.created_at ? new Date(a.last_message.created_at).getTime() : 0;
+      const timeB = b.last_message?.created_at ? new Date(b.last_message.created_at).getTime() : 0;
+      return timeB - timeA;
+    });
+
+    return { conversations: updatedConversations };
   }),
 }));

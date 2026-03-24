@@ -57,8 +57,15 @@ export const useChatWebSocket = (conversationId: string | null) => {
           
           switch (data.type) {
             case 'message': {
-              const newMessage: Message = data.data;
+              const newMessage: Message = data.data || data;
               addMessage(newMessage);
+              break;
+            }
+            case 'new_message': {
+              const newMessage: Message = data.last_message;
+              if (newMessage) {
+                addMessage(newMessage);
+              }
               break;
             }
             case 'read_receipt': // legacy handling, depending on backend implementation
@@ -157,8 +164,23 @@ export const useChatWebSocket = (conversationId: string | null) => {
     }
   }, []);
 
+  const lastReadReceiptTime = useRef<number>(0);
+  const lastReadMessageId = useRef<string | null>(null);
+
   const sendReadReceipt = useCallback((messageId?: string) => {
     if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+      // Deduplicate consecutive identical receipts
+      if (messageId && messageId === lastReadMessageId.current) return;
+      
+      const now = Date.now();
+      // Throttle global mark-read (empty messageId) to at most once per second
+      if (!messageId && now - lastReadReceiptTime.current < 1000) return;
+
+      lastReadReceiptTime.current = now;
+      if (messageId) {
+        lastReadMessageId.current = messageId;
+      }
+
       ws.current.send(JSON.stringify({
         action: 'mark_read',
         ...(messageId ? { message_id: messageId } : {})
