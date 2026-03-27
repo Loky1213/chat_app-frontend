@@ -10,7 +10,7 @@ import { Users, UserMinus, Shield, ShieldOff, Plus, Check, X } from 'lucide-reac
 export const GroupManagement = ({ onClose }: { onClose: () => void }) => {
   const { conversations, activeConversationId, setConversations, onlineUsers } = useChatStore();
   const { user: currentUser } = useAuth();
-  
+
   const [contacts, setContacts] = useState<User[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -122,9 +122,6 @@ export const GroupManagement = ({ onClose }: { onClose: () => void }) => {
                       <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center font-bold text-sm">
                         {p.username[0].toUpperCase()}
                       </div>
-                      {onlineUsers.includes(p.id) && (
-                        <div className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-green-500 border-2 border-white rounded-full"></div>
-                      )}
                     </div>
                     <div>
                       <div className="text-sm font-semibold text-gray-800 flex items-center gap-2">
@@ -138,7 +135,7 @@ export const GroupManagement = ({ onClose }: { onClose: () => void }) => {
                   {isCurrentUserAdmin && !isMe && !p.is_creator && (
                     <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                       {isAdmin ? (
-                        <button 
+                        <button
                           onClick={() => handleRemoveAdmin(p.id)}
                           disabled={loading}
                           className="p-1.5 text-orange-600 hover:bg-orange-50 rounded-md transition-colors"
@@ -147,7 +144,7 @@ export const GroupManagement = ({ onClose }: { onClose: () => void }) => {
                           <Shield size={16} className="fill-orange-600 opacity-20" />
                         </button>
                       ) : (
-                        <button 
+                        <button
                           onClick={() => handlePromoteAdmin(p.id)}
                           disabled={loading}
                           className="p-1.5 text-green-600 hover:bg-green-50 rounded-md transition-colors"
@@ -156,8 +153,8 @@ export const GroupManagement = ({ onClose }: { onClose: () => void }) => {
                           <Shield size={16} />
                         </button>
                       )}
-                      
-                      <button 
+
+                      <button
                         onClick={() => handleRemoveMember(p.id)}
                         disabled={loading}
                         className="p-1.5 text-red-600 hover:bg-red-50 rounded-md transition-colors"
@@ -179,7 +176,7 @@ export const GroupManagement = ({ onClose }: { onClose: () => void }) => {
                 {nonMembers.map(contact => (
                   <div key={contact.id} className="flex justify-between items-center p-2 hover:bg-gray-50 rounded-lg border border-transparent hover:border-gray-100 transition-all">
                     <div className="text-sm text-gray-700">{contact.username}</div>
-                    <button 
+                    <button
                       onClick={() => handleAddMember(contact.id)}
                       disabled={loading}
                       className="bg-blue-50 text-blue-600 hover:bg-blue-100 px-3 py-1 rounded-md text-sm font-medium transition-colors flex items-center gap-1"

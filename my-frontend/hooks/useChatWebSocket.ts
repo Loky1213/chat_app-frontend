@@ -8,16 +8,15 @@ export const useChatWebSocket = (conversationId: string | null) => {
     addReadReceipt,
     updateMessage,
     removeMessage,
-    setOnline,
-    setOffline,
     setTyping,
-    setSocket 
+    setSocket,
+    updateMessageReactions 
   } = useChatStore();
   const ws = useRef<WebSocket | null>(null);
 
   const getWsUrl = (id: string) => {
     // Using localhost to match the backend CORS_ALLOWED_ORIGINS configuration
-    const baseWbUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000';
+    const baseWbUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://127.0.0.1:8000';
     const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : '';
     return `${baseWbUrl}/ws/chat/${id}/?token=${token}`;
   };
@@ -32,22 +31,23 @@ export const useChatWebSocket = (conversationId: string | null) => {
       return;
     }
 
-    let reconnectTimeoutId: NodeJS.Timeout;
+    let reconnectTimeoutId: NodeJS.Timeout | null = null;
+    let retryCount = 0;
+    let isComponentMounted = true;
 
     const connect = () => {
       const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
-      if (!token) {
-        console.warn('Cannot connect to WebSocket: No access_token found in localStorage');
-        // Do not attempt to establish the connection if token is missing
-        return;
-      }
+      if (!token) return;
 
-      console.log(`Connecting WebSocket to conversation: ${conversationId} with token: ${token.substring(0, 15)}...`);
+      if (ws.current) return;
+
+      console.log(`WS INIT (Chat: ${conversationId})`);
       const url = getWsUrl(conversationId);
       const socket = new WebSocket(url);
 
       socket.onopen = () => {
-        console.log('Chat WebSocket Connected:', conversationId);
+        console.log(`WS OPEN (Chat: ${conversationId})`);
+        retryCount = 0;
         setSocket(socket);
       };
 
@@ -68,18 +68,10 @@ export const useChatWebSocket = (conversationId: string | null) => {
               }
               break;
             }
-            case 'read_receipt': // legacy handling, depending on backend implementation
+            case 'read_receipt': 
             case 'message_seen': {
               const userIdMapping = Number(data.user_id);
               addReadReceipt(userIdMapping, data.message_id);
-              break;
-            }
-            case 'user_online': {
-              setOnline(Number(data.user_id));
-              break;
-            }
-            case 'user_offline': {
-              setOffline(Number(data.user_id));
               break;
             }
             case 'message_deleted': {
@@ -99,6 +91,12 @@ export const useChatWebSocket = (conversationId: string | null) => {
               setTyping(Number(data.user_id));
               break;
             }
+            case 'reaction_update': {
+              if (data.message_id && data.reactions) {
+                updateMessageReactions(data.message_id, data.reactions);
+              }
+              break;
+            }
           }
         } catch (err) {
           console.error('Error parsing WS message:', err);
@@ -106,14 +104,26 @@ export const useChatWebSocket = (conversationId: string | null) => {
       };
 
       socket.onerror = (error) => {
-        console.error('Chat WebSocket Error:', error);
+        console.warn('WS ERROR (expected sometimes)', error);
       };
 
-      socket.onclose = () => {
-        console.log('Chat WebSocket Disconnected. Rescheduling connection...');
+      socket.onclose = (event) => {
+        console.log(`WS CLOSED (Chat: ${conversationId}):`, event.code, event.reason);
         setSocket(null);
-        // Implement simple auto-reconnect logic
-        reconnectTimeoutId = setTimeout(connect, 3000);
+        ws.current = null;
+
+        if (event.code === 1008) {
+          console.warn('Backend rejected auth token for Chat socket');
+          return;
+        }
+
+        const delay = Math.min(1000 * Math.pow(2, retryCount), 10000);
+        retryCount++;
+
+        if (reconnectTimeoutId) clearTimeout(reconnectTimeoutId);
+        reconnectTimeoutId = setTimeout(() => {
+          if (isComponentMounted) connect();
+        }, delay);
       };
 
       ws.current = socket;
@@ -121,25 +131,37 @@ export const useChatWebSocket = (conversationId: string | null) => {
 
     connect();
 
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        if (!ws.current || ws.current.readyState !== WebSocket.OPEN) {
+          connect();
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
     return () => {
-      // Clean up cleanly on unmount or active conversation switch
-      clearTimeout(reconnectTimeoutId);
+      isComponentMounted = false;
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      
+      if (reconnectTimeoutId) clearTimeout(reconnectTimeoutId);
       if (ws.current) {
-        // Remove the close listener so we don't accidentally auto-reconnect when deliberately destroying the component
         ws.current.onclose = null; 
         ws.current.close();
         ws.current = null;
         setSocket(null);
       }
     };
-  }, [conversationId, addMessage, addReadReceipt, updateMessage, removeMessage, setOnline, setOffline, setTyping, setSocket]);
+  }, [conversationId, addMessage, addReadReceipt, updateMessage, removeMessage, setTyping, setSocket, updateMessageReactions]);
 
-  const sendMessage = useCallback((content: string) => {
+  const sendMessage = useCallback((content: string, replyToId?: string) => {
     if (ws.current && ws.current.readyState === WebSocket.OPEN) {
       ws.current.send(JSON.stringify({
         action: 'send_message',
         message: content,
-        type: 'text'
+        type: 'text',
+        ...(replyToId ? { reply_to: replyToId } : {})
       }));
     } else {
       console.warn('Cannot send message: WebSocket is not open');
@@ -152,6 +174,16 @@ export const useChatWebSocket = (conversationId: string | null) => {
         action: 'delete_message',
         message_id: messageId,
         mode
+      }));
+    }
+  }, []);
+
+  const sendReaction = useCallback((messageId: string, emoji: string) => {
+    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+      ws.current.send(JSON.stringify({
+        action: 'react',
+        message_id: messageId,
+        emoji
       }));
     }
   }, []);
@@ -188,5 +220,5 @@ export const useChatWebSocket = (conversationId: string | null) => {
     }
   }, []);
 
-  return { sendMessage, sendDeleteMessage, sendTyping, sendReadReceipt, socketReadyState: ws.current?.readyState };
+  return { sendMessage, sendDeleteMessage, sendTyping, sendReadReceipt, sendReaction, socketReadyState: ws.current?.readyState };
 };

@@ -58,5 +58,15 @@ export const chatApi = {
   removeAdmin: async (conversationId: string, userId: number) => {
     const res = await apiClient.post(`/api/chat/conversations/${conversationId}/remove-admin/`, { user_id: userId });
     return res.data;
+  },
+
+  // Forward Messages
+  forwardMessage: async (messageId: string, targetConversationIds: string[]): Promise<any> => {
+    const payload = {
+      message_id: messageId,
+      target_conversation_ids: targetConversationIds.map(Number) // Convert to numbers just in case backend expects integers
+    };
+    const res = await apiClient.post('/api/chat/messages/forward/', payload);
+    return res.data;
   }
 };

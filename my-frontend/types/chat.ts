@@ -18,6 +18,18 @@ export interface Message {
   read_by?: number[]; // list of user ids that have read this message
   is_deleted?: boolean;
   deleted_for_everyone?: boolean;
+  is_forwarded?: boolean;
+  reply_to?: {
+    id: string;
+    content: string;
+    sender_id: string;
+    sender_username: string;
+  } | null;
+  reactions?: {
+    emoji: string;
+    count: number;
+    user_reacted: boolean;
+  }[];
 }
 
 export interface Conversation {

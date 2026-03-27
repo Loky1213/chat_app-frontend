@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useChatStore } from '@/store/useChatStore';
 import { chatApi } from '@/services/api/chat';
+import { Message } from '@/types/chat';
 import { ConversationList } from './ConversationList';
 import { MessageList } from './MessageList';
 import { MessageInput } from './MessageInput';
@@ -14,13 +15,18 @@ import { useAuth } from '@/context/AuthContext';
 import { Info } from 'lucide-react';
 
 export const ChatContainer = () => {
-  const { conversations, fetchConversations, activeConversationId, setMessages } = useChatStore();
+  const { conversations, fetchConversations, activeConversationId, setMessages, onlineUsers } = useChatStore();
   const [showGroupInfo, setShowGroupInfo] = useState(false);
   const { user: currentUser } = useAuth();
-  const { sendMessage, sendDeleteMessage, sendTyping, sendReadReceipt } = useChatWebSocket(activeConversationId);
+  const { sendMessage, sendDeleteMessage, sendTyping, sendReadReceipt, sendReaction } = useChatWebSocket(activeConversationId);
+  const [replyMessage, setReplyMessage] = useState<Message | null>(null);
   useGlobalWebSocket(); // Initialize global websocket connection for sidebar reordering
 
   const activeConversation = conversations.find(c => c.id === activeConversationId);
+
+  const isPrivateChat = activeConversation && activeConversation.participants.length <= 2 && !activeConversation.name;
+  const otherParticipant = isPrivateChat ? activeConversation.participants.find(p => String(p.id) !== String(currentUser?.id)) : null;
+  const isOnline = otherParticipant ? !!onlineUsers[otherParticipant.id] : false;
 
   // Initialize Conversation List
   useEffect(() => {
@@ -56,16 +62,18 @@ export const ChatContainer = () => {
         {activeConversation && (
           <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-white shadow-sm z-10">
             <div>
-              <h2 className="font-bold text-gray-800 text-lg">
+              <h2 className="font-bold text-gray-800 text-lg flex items-center gap-2">
                 {activeConversation.name || activeConversation.participants.filter(p => String(p.id) !== String(currentUser?.id)).map(p => p.username).join(', ') || 'Chat'}
               </h2>
-              {activeConversation.participants.length > 2 && (
+              {activeConversation.participants.length > 2 ? (
                 <div className="text-xs text-gray-500">{activeConversation.participants.length} participants</div>
+              ) : (
+                isOnline && <div className="text-xs text-green-500 font-medium">Online</div>
               )}
             </div>
             {/* Show Info button ONLY for group chats */}
             {(activeConversation.participants.length > 2 || activeConversation.name) && (
-              <button 
+              <button
                 onClick={() => setShowGroupInfo(true)}
                 className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-colors"
                 title="Group Info"
@@ -76,8 +84,8 @@ export const ChatContainer = () => {
           </div>
         )}
 
-        <MessageList sendReadReceipt={sendReadReceipt} sendDeleteMessage={sendDeleteMessage} />
-        <MessageInput sendMessage={sendMessage} sendTyping={sendTyping} />
+        <MessageList sendReadReceipt={sendReadReceipt} sendDeleteMessage={sendDeleteMessage} onReply={setReplyMessage} sendReaction={sendReaction} />
+        <MessageInput sendMessage={sendMessage} sendTyping={sendTyping} replyMessage={replyMessage} onCancelReply={() => setReplyMessage(null)} />
 
         {showGroupInfo && <GroupManagement onClose={() => setShowGroupInfo(false)} />}
       </div>
