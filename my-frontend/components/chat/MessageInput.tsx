@@ -17,7 +17,7 @@ interface MessageInputProps {
 
 export const MessageInput = ({ sendMessage, sendTyping, replyMessage, onCancelReply }: MessageInputProps) => {
   const [content, setContent] = useState('');
-  const { activeConversationId } = useChatStore();
+  const activeConversationId = useChatStore((state) => state.activeConversationId);
   const { user } = useAuth();
   const lastTypingTime = useRef<number>(0);
   const inputRef = useRef<HTMLInputElement>(null);

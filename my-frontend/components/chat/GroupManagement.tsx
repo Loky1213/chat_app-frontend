@@ -8,13 +8,15 @@ import { useAuth } from '@/context/AuthContext';
 import { Users, UserMinus, Shield, ShieldOff, Plus, Check, X } from 'lucide-react'; // Added X back
 
 export const GroupManagement = ({ onClose }: { onClose: () => void }) => {
-  const { conversations, activeConversationId, setConversations, onlineUsers } = useChatStore();
+  const conversations = useChatStore((s) => s.conversations);
+  const activeConversationId = useChatStore((s) => s.activeConversationId);
+  const setConversations = useChatStore((s) => s.setConversations);
   const { user: currentUser } = useAuth();
 
   const [contacts, setContacts] = useState<User[]>([]);
   const [loading, setLoading] = useState(false);
 
-  const activeConversation = conversations.find(c => c.id === activeConversationId);
+  const activeConversation = conversations.find(c => String(c.id) === String(activeConversationId));
 
   useEffect(() => {
     const fetchContacts = async () => {
@@ -99,7 +101,7 @@ export const GroupManagement = ({ onClose }: { onClose: () => void }) => {
   );
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[80vh]">
         <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
           <h2 className="text-lg font-bold text-gray-800">Group Management</h2>

@@ -22,7 +22,12 @@ interface MessageListProps {
 }
 
 export const MessageList = ({ sendReadReceipt, sendDeleteMessage, onReply, sendReaction }: MessageListProps) => {
-  const { messages, activeConversationId, readReceiptsUserIds, typingUsers, conversations, socket } = useChatStore();
+  const messages = useChatStore((state) => state.messages);
+  const activeConversationId = useChatStore((state) => state.activeConversationId);
+  const readReceiptsUserIds = useChatStore((state) => state.readReceiptsUserIds);
+  const typingUsers = useChatStore((state) => state.typingUsers);
+  const conversations = useChatStore((state) => state.conversations);
+  const socket = useChatStore((state) => state.socket);
   const { user } = useAuth();
   const bottomRef = useRef<HTMLDivElement>(null);
   const observerRef = useRef<IntersectionObserver | null>(null);
@@ -107,9 +112,14 @@ export const MessageList = ({ sendReadReceipt, sendDeleteMessage, onReply, sendR
 
   // Dispatch a global conversation marker to reset backend unread_count reliably upon opening
   // Ensure we wait for the WebSocket to fully connect before firing, otherwise it fails silently
+  const lastOpenedRef = useRef<string | null>(null);
+
   useEffect(() => {
     if (activeConversationId && socket && socket.readyState === WebSocket.OPEN) {
-      sendReadReceipt(); // Empty messageId triggers global conversation mark-read fallback
+      if (lastOpenedRef.current !== activeConversationId) {
+        sendReadReceipt(); // Empty messageId triggers global conversation mark-read fallback
+        lastOpenedRef.current = String(activeConversationId);
+      }
     }
   }, [activeConversationId, socket, sendReadReceipt]);
 
@@ -132,9 +142,9 @@ export const MessageList = ({ sendReadReceipt, sendDeleteMessage, onReply, sendR
   return (
     <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4 bg-gray-50 h-full relative" onClick={() => { setActiveMenuId(null); setEmojiPickerMsgId(null); }}>
       {[...messages].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()).map((msg) => {
-        const isMine = user && String(msg.sender.id) === String(user.id);
+        const isMine = user && String(msg.sender?.id ?? (msg as any).sender_id) === String(user.id);
         const isReadByMe = user && msg.read_by?.includes(user.id);
-        const readByArray = msg.read_by || (msg as any).read_receipts || (msg as any).seen_by;
+        const readByArray = msg.read_by || (msg as any).read_receipts || (msg as any).seen_by || [];
         const isRead = 
           (readByArray && readByArray.some((reader: any) => {
             const readerId = typeof reader === 'object' ? reader.id : reader;
@@ -194,7 +204,7 @@ export const MessageList = ({ sendReadReceipt, sendDeleteMessage, onReply, sendR
                 )}
                 {!isMine && !msg.deleted_for_everyone && (
                   <div className="text-xs font-semibold text-blue-500 mb-1">
-                    {msg.sender.username}
+                    {msg.sender?.username ?? (msg as any).sender_username ?? (msg as any).sender_name ?? 'User'}
                   </div>
                 )}
                 {msg.deleted_for_everyone || msg.content === 'This message was deleted' ? 'This message was deleted' : (
@@ -340,7 +350,7 @@ export const MessageList = ({ sendReadReceipt, sendDeleteMessage, onReply, sendR
       
       {forwardMessageId && (
         <ForwardModal 
-          messageId={forwardMessageId} 
+          messageId={Number(forwardMessageId)} 
           onClose={() => setForwardMessageId(null)} 
         />
       )}

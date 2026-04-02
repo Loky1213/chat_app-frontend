@@ -20,17 +20,15 @@ export const chatApi = {
     await apiClient.post(`/api/chat/conversations/${conversationId}/mark-read/`);
   },
 
-  // NEW: Fetch all available users to start a chat with
+  // Fetch all available users to start a chat with
   getUsers: async (): Promise<User[]> => {
     const res = await apiClient.get('/api/user/users/');
-    // Assuming backend returns { success: true, data: [...] } or just the array
     return res.data.data || res.data; 
   },
 
-  // NEW: Create a private chat with a specific user
+  // Create a private chat with a specific user
   createPrivateChat: async (userId: number): Promise<{ conversation_id: string }> => {
     const res = await apiClient.post('/api/chat/private/create/', { user_id: userId });
-    // Assuming backend returns { success: true, data: { conversation_id: "..." } }
     return res.data.data;
   },
 
@@ -61,12 +59,28 @@ export const chatApi = {
   },
 
   // Forward Messages
-  forwardMessage: async (messageId: string, targetConversationIds: string[]): Promise<any> => {
+  forwardMessage: async (messageId: number, targetConversationIds: number[]): Promise<any> => {
     const payload = {
-      message_id: messageId,
-      target_conversation_ids: targetConversationIds.map(Number) // Convert to numbers just in case backend expects integers
+      message_id: Number(messageId),
+      target_ids: targetConversationIds.map(Number)
     };
     const res = await apiClient.post('/api/chat/messages/forward/', payload);
     return res.data;
-  }
+  },
+
+  // Presence APIs
+  getOnlineUsers: async (): Promise<string[]> => {
+    const res = await apiClient.get('/api/chat/presence/online-users/');
+    return res.data.online_users;
+  },
+
+  getMyPresence: async (): Promise<{ is_online: boolean; is_hidden: boolean }> => {
+    const res = await apiClient.get('/api/chat/presence/me/');
+    return res.data;
+  },
+
+  toggleHideOnline: async (hideOnline: boolean) => {
+    const res = await apiClient.post('/api/chat/presence/toggle/', { hide_online: hideOnline });
+    return res.data;
+  },
 };

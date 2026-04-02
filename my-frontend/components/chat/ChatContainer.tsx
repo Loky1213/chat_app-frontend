@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useChatStore } from '@/store/useChatStore';
+import { usePresenceStore } from '@/store/usePresenceStore';
 import { chatApi } from '@/services/api/chat';
 import { Message } from '@/types/chat';
 import { ConversationList } from './ConversationList';
@@ -15,18 +16,33 @@ import { useAuth } from '@/context/AuthContext';
 import { Info } from 'lucide-react';
 
 export const ChatContainer = () => {
-  const { conversations, fetchConversations, activeConversationId, setMessages, onlineUsers } = useChatStore();
+  const conversations = useChatStore((state) => state.conversations);
+  const fetchConversations = useChatStore((state) => state.fetchConversations);
+  const activeConversationId = useChatStore((state) => state.activeConversationId);
+  const setMessages = useChatStore((state) => state.setMessages);
+  const onlineUsers = usePresenceStore((s) => s.onlineUsers);
   const [showGroupInfo, setShowGroupInfo] = useState(false);
   const { user: currentUser } = useAuth();
   const { sendMessage, sendDeleteMessage, sendTyping, sendReadReceipt, sendReaction } = useChatWebSocket(activeConversationId);
   const [replyMessage, setReplyMessage] = useState<Message | null>(null);
-  useGlobalWebSocket(); // Initialize global websocket connection for sidebar reordering
+  useGlobalWebSocket();
 
-  const activeConversation = conversations.find(c => c.id === activeConversationId);
+  // Hydrate presence on app load
+  useEffect(() => {
+    if (currentUser?.id) {
+      const store = usePresenceStore.getState();
+      store.setCurrentUserId(currentUser.id);
+      if (!store.isInitialized) {
+        store.hydratePresence();
+      }
+    }
+  }, [currentUser]);
+
+  const activeConversation = conversations.find(c => String(c.id) === String(activeConversationId));
 
   const isPrivateChat = activeConversation && activeConversation.participants.length <= 2 && !activeConversation.name;
   const otherParticipant = isPrivateChat ? activeConversation.participants.find(p => String(p.id) !== String(currentUser?.id)) : null;
-  const isOnline = otherParticipant ? !!onlineUsers[otherParticipant.id] : false;
+  const isOnline = otherParticipant ? onlineUsers.has(String(otherParticipant.id)) : false;
 
   // Initialize Conversation List
   useEffect(() => {
@@ -40,9 +56,8 @@ export const ChatContainer = () => {
     const fetchMessages = async () => {
       try {
         const data = await chatApi.getMessages(activeConversationId);
-        // Step 6 handles DRF pagination array extraction upstream cleanly
         const messagesArray = Array.isArray(data) ? data : [];
-        setMessages([...messagesArray].reverse()); // Reverse to show oldest first
+        setMessages([...messagesArray].reverse());
       } catch (error) {
         console.error('Failed to load messages:', error);
       }

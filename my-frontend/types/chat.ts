@@ -40,3 +40,4 @@ export interface Conversation {
   participants: User[];
   last_message?: Message;
 }
+

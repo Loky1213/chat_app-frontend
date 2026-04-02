@@ -5,16 +5,19 @@ import { X, Search, Check, Send } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 
 interface ForwardModalProps {
-  messageId: string;
+  messageId: number;
   onClose: () => void;
 }
 
 export const ForwardModal: React.FC<ForwardModalProps> = ({ messageId, onClose }) => {
-  const { conversations, activeConversationId } = useChatStore();
+  const conversations = useChatStore((state) => state.conversations);
+  const activeConversationId = useChatStore((state) => state.activeConversationId);
+  const messages = useChatStore((state) => state.messages);
+  const updateConversationOnSend = useChatStore((state) => state.updateConversationOnSend);
   const { user: currentUser } = useAuth();
   
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -33,7 +36,7 @@ export const ForwardModal: React.FC<ForwardModalProps> = ({ messageId, onClose }
     });
   }, [searchQuery, availableConversations, currentUser]);
 
-  const toggleSelection = (conversationId: string) => {
+  const toggleSelection = (conversationId: number) => {
     setSelectedIds(prev => {
       if (prev.includes(conversationId)) {
         return prev.filter(id => id !== conversationId);
@@ -46,12 +49,40 @@ export const ForwardModal: React.FC<ForwardModalProps> = ({ messageId, onClose }
   };
 
   const handleForward = async () => {
-    if (selectedIds.length === 0) return;
+    if (!selectedIds.length) return;
     
+    if (selectedIds.some(id => typeof id !== "number")) {
+      throw new Error("Invalid target IDs");
+    }
+
+    console.log("[Forward] Payload:", {
+      message_id: messageId,
+      target_ids: selectedIds
+    });
+
     setIsSubmitting(true);
     setError(null);
     try {
       await chatApi.forwardMessage(messageId, selectedIds);
+
+      // Optimistic UI: update sender's conversation list immediately
+      const originalMessage = messages.find(m => String(m.id) === String(messageId));
+      if (originalMessage && currentUser) {
+        const now = new Date().toISOString();
+        selectedIds.forEach(targetConvId => {
+          console.log('[Forward] Optimistic update for conversation:', targetConvId);
+          updateConversationOnSend({
+            id: `fwd_${Date.now()}_${targetConvId}`,
+            content: originalMessage.content,
+            created_at: now,
+            sender: currentUser,
+            conversation_id: String(targetConvId),
+            message_type: originalMessage.message_type || 'text',
+            is_forwarded: true,
+          });
+        });
+      }
+
       onClose();
     } catch (err: any) {
       setError(err?.response?.data?.message || 'Failed to forward message. Please try again.');
@@ -112,7 +143,7 @@ export const ForwardModal: React.FC<ForwardModalProps> = ({ messageId, onClose }
           ) : (
             <div className="space-y-1">
               {filteredConversations.map(conv => {
-                const isSelected = selectedIds.includes(String(conv.id));
+                const isSelected = selectedIds.includes(Number(conv.id));
                 const isDisabled = !isSelected && selectedIds.length >= 5;
                 const displayName = conv.name || conv.participants.filter(p => String(p.id) !== String(currentUser?.id)).map(p => p.username).join(', ') || 'Chat';
 
@@ -120,7 +151,7 @@ export const ForwardModal: React.FC<ForwardModalProps> = ({ messageId, onClose }
                   <button
                     key={conv.id}
                     disabled={isDisabled}
-                    onClick={() => toggleSelection(String(conv.id))}
+                    onClick={() => toggleSelection(Number(conv.id))}
                     className={`w-full flex items-center gap-3 p-3 rounded-lg transition-all text-left group
                       ${isSelected ? 'bg-blue-50 cursor-pointer' : isDisabled ? 'opacity-50 cursor-not-allowed grayscale' : 'hover:bg-gray-50 cursor-pointer'}
                     `}

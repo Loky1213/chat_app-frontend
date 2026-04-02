@@ -1,17 +1,19 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { useChatStore } from '@/store/useChatStore';
 import { Message } from '@/types/chat';
+import { useAuth } from '@/context/AuthContext';
 
 export const useChatWebSocket = (conversationId: string | null) => {
-  const { 
-    addMessage, 
-    addReadReceipt,
-    updateMessage,
-    removeMessage,
-    setTyping,
-    setSocket,
-    updateMessageReactions 
-  } = useChatStore();
+  const { user } = useAuth();
+  const addMessage = useChatStore((s) => s.addMessage);
+  const addReadReceipt = useChatStore((s) => s.addReadReceipt);
+  const updateMessage = useChatStore((s) => s.updateMessage);
+  const removeMessage = useChatStore((s) => s.removeMessage);
+  const setTyping = useChatStore((s) => s.setTyping);
+  const setSocket = useChatStore((s) => s.setSocket);
+  const updateMessageReactions = useChatStore((s) => s.updateMessageReactions);
+  const updateConversationOnSend = useChatStore((s) => s.updateConversationOnSend);
+  const handleUnreadReset = useChatStore((s) => s.handleUnreadReset);
   const ws = useRef<WebSocket | null>(null);
 
   const getWsUrl = (id: string) => {
@@ -61,7 +63,9 @@ export const useChatWebSocket = (conversationId: string | null) => {
               addMessage(newMessage);
               break;
             }
-            case 'new_message': {
+            case 'new_message':
+            case 'forwarded_message': {
+              console.log(`[WS Chat] ${data.type} received in conversation ${conversationId}`);
               const newMessage: Message = data.last_message;
               if (newMessage) {
                 addMessage(newMessage);
@@ -94,6 +98,24 @@ export const useChatWebSocket = (conversationId: string | null) => {
             case 'reaction_update': {
               if (data.message_id && data.reactions) {
                 updateMessageReactions(data.message_id, data.reactions);
+              }
+              break;
+            }
+            case 'unread_reset': {
+              const chatId = data.conversation_id || data.chat_id;
+              if (chatId) {
+                handleUnreadReset(String(chatId));
+              }
+              break;
+            }
+            case 'group_update':
+            case 'group_updated':
+            case 'admin_updated':
+            case 'participant_updated':
+            case 'update_conversation': {
+              useChatStore.getState().fetchConversations();
+              if (conversationId) {
+                useChatStore.getState().fetchMessages(conversationId);
               }
               break;
             }
@@ -163,10 +185,22 @@ export const useChatWebSocket = (conversationId: string | null) => {
         type: 'text',
         ...(replyToId ? { reply_to: replyToId } : {})
       }));
+
+      // Optimistic UI for sender's sidebar
+      if (user && conversationId) {
+        updateConversationOnSend({
+          id: `temp_${Date.now()}`,
+          content,
+          created_at: new Date().toISOString(),
+          sender: user,
+          conversation_id: conversationId,
+          message_type: 'text',
+        });
+      }
     } else {
       console.warn('Cannot send message: WebSocket is not open');
     }
-  }, []);
+  }, [user, conversationId, updateConversationOnSend]);
 
   const sendDeleteMessage = useCallback((messageId: string, mode: 'me' | 'everyone') => {
     if (ws.current && ws.current.readyState === WebSocket.OPEN) {
