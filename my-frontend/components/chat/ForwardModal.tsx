@@ -64,6 +64,7 @@ export const ForwardModal: React.FC<ForwardModalProps> = ({ messageId, onClose }
     setError(null);
     try {
       await chatApi.forwardMessage(messageId, selectedIds);
+      console.log("[Forward] API call successful");
 
       // Optimistic UI: update sender's conversation list immediately
       const originalMessage = messages.find(m => String(m.id) === String(messageId));
@@ -83,8 +84,11 @@ export const ForwardModal: React.FC<ForwardModalProps> = ({ messageId, onClose }
         });
       }
 
+      console.log("[Forward] Calling onClose");
       onClose();
+      console.log("[Forward] onClose called");
     } catch (err: any) {
+      console.error("[Forward] Error:", err);
       setError(err?.response?.data?.message || 'Failed to forward message. Please try again.');
     } finally {
       setIsSubmitting(false);
@@ -92,8 +96,14 @@ export const ForwardModal: React.FC<ForwardModalProps> = ({ messageId, onClose }
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col h-[80vh] max-h-[600px] animate-in slide-in-from-bottom-4 duration-300">
+    <div 
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-in fade-in duration-200"
+      onClick={onClose}
+    >
+      <div 
+        className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col h-[80vh] max-h-[600px] animate-in slide-in-from-bottom-4 duration-300"
+        onClick={(e) => e.stopPropagation()}
+      >
         
         {/* Header */}
         <div className="flex justify-between items-center p-4 border-b border-gray-100 bg-white z-10">

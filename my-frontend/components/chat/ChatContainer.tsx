@@ -43,7 +43,15 @@ export const ChatContainer = () => {
   const otherParticipant = isPrivateChat
     ? activeConversation.participants.find(p => String(p.id) !== String(currentUser?.id))
     : null;
-  const isOnline = otherParticipant ? onlineUsers.has(String(otherParticipant.id)) : false;
+  
+  // Get current user's hidden status
+  const isCurrentUserHidden = usePresenceStore((s) => s.isHidden);
+  
+  // If current user is hidden, they can't see others' online status (WhatsApp-like privacy)
+  // Otherwise, check if the other participant is in the online list
+  const isOnline = !isCurrentUserHidden && otherParticipant 
+    ? onlineUsers.has(String(otherParticipant.id)) 
+    : false;
 
   // Initialize conversation list on mount
   useEffect(() => {

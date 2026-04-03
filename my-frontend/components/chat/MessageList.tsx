@@ -21,7 +21,6 @@ interface MessageListProps {
 export const MessageList = ({ sendReadReceipt, sendDeleteMessage, onReply, sendReaction }: MessageListProps) => {
   const messages = useChatStore((state) => state.messages);
   const activeConversationId = useChatStore((state) => state.activeConversationId);
-  const readReceiptsUserIds = useChatStore((state) => state.readReceiptsUserIds);
   const typingUsers = useChatStore((state) => state.typingUsers);
   const conversations = useChatStore((state) => state.conversations);
   const socket = useChatStore((state) => state.socket);
@@ -37,6 +36,11 @@ export const MessageList = ({ sendReadReceipt, sendDeleteMessage, onReply, sendR
   const pickerRef = useRef<HTMLDivElement | null>(null);
   const [quickReactMsgId, setQuickReactMsgId] = useState<string | null>(null);
   const quickReactRef = useRef<HTMLDivElement | null>(null);
+
+  // Debug: track forward modal state
+  useEffect(() => {
+    console.log('[MessageList] forwardMessageId changed to:', forwardMessageId);
+  }, [forwardMessageId]);
 
   const recentEmojis = getRecentEmojis();
   const quickEmojis = recentEmojis.length >= 5 ? recentEmojis.slice(0, 6) : DEFAULT_QUICK_EMOJIS;
@@ -139,31 +143,25 @@ export const MessageList = ({ sendReadReceipt, sendDeleteMessage, onReply, sendR
           const isMine = user && String(msg.sender?.id ?? (msg as any).sender_id) === String(user.id);
           const isReadByMe = !!(user && msg.read_by?.some(id => String(id) === String(user.id)));
 
-          // FIX: Blue tick (isRead) should only be true when someone OTHER than
-          // the current user has actually read the message.
-          //
-          // Previous bug: readReceiptsUserIds was not cleared on conversation switch,
-          // so IDs from the previous conversation bled in and isRead was true immediately.
-          // Also the readByArray check did not exclude the sender's own ID properly.
-          //
-          // Now: isRead is true only when:
-          //   (a) msg.read_by contains at least one ID that is NOT the current user, OR
-          //   (b) a live read_receipt/message_seen WS event arrived with a userId != mine
+          // Blue tick logic:
+          // 1. Check msg.read_by for any user OTHER than the sender (current user for outgoing messages)
+          // 2. For incoming messages, we don't show blue ticks at all
+          // 3. Only show blue tick if someone has actually read THIS specific message
+          
           const readByArray: any[] = msg.read_by || (msg as any).read_receipts || (msg as any).seen_by || [];
-
+          
+          // Check if any OTHER user has read this message
           const isReadByOther = readByArray.some((reader: any) => {
             const readerId = String(typeof reader === 'object' ? reader.id : reader);
             return readerId !== String(user?.id);
           });
 
-          // FIX: Only use readReceiptsUserIds if they contain a user OTHER than yourself.
-          // Previously this was checked but the array was never cleared on conversation
-          // switch, making it always return true after the first receipt in any chat.
-          const hasLiveReceipt = readReceiptsUserIds.some(
-            id => String(id) !== String(user?.id)
-          );
-
-          const isRead = isReadByOther || hasLiveReceipt;
+          // FIX: Only use readReceiptsUserIds if this specific message was marked as read.
+          // The readReceiptsUserIds contains ALL users who have sent read receipts in this conversation,
+          // but we only want to show blue tick if the message was explicitly read.
+          // Since the backend sends read_receipts per message, we rely on msg.read_by being populated.
+          // For live receipts, the addReadReceipt function updates msg.read_by directly.
+          const isRead = isMine && isReadByOther;
 
           return (
             <div

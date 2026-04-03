@@ -3,6 +3,24 @@ import { useChatStore } from '@/store/useChatStore';
 import { Message } from '@/types/chat';
 import { useAuth } from '@/context/AuthContext';
 
+// ─── MODULE-LEVEL SINGLETON STATE ───────────────────────────────────────────
+// Ensures only ONE chat socket exists per conversation, even with React strict mode
+let chatWsInstance: WebSocket | null = null;
+let chatWsConversationId: string | null = null;
+let chatWsRetryCount = 0;
+let chatWsReconnectTimeout: NodeJS.Timeout | null = null;
+// Track processed message IDs to prevent duplicate event handling
+const chatProcessedMessageIds = new Set<string>();
+const MAX_PROCESSED_IDS = 500;
+
+const cleanupProcessedIds = () => {
+  if (chatProcessedMessageIds.size > MAX_PROCESSED_IDS) {
+    const idsArray = Array.from(chatProcessedMessageIds);
+    const toRemove = idsArray.slice(0, idsArray.length - MAX_PROCESSED_IDS / 2);
+    toRemove.forEach(id => chatProcessedMessageIds.delete(id));
+  }
+};
+
 export const useChatWebSocket = (conversationId: string | null) => {
   const { user } = useAuth();
   const addMessage = useChatStore((s) => s.addMessage);
@@ -14,37 +32,66 @@ export const useChatWebSocket = (conversationId: string | null) => {
   const updateMessageReactions = useChatStore((s) => s.updateMessageReactions);
   const updateConversationOnSend = useChatStore((s) => s.updateConversationOnSend);
   const handleUnreadReset = useChatStore((s) => s.handleUnreadReset);
-  const ws = useRef<WebSocket | null>(null);
+  
+  const mountedRef = useRef(true);
+  const visibilityHandlerRef = useRef<(() => void) | null>(null);
 
   const getWsUrl = (id: string): string => {
     const baseWsUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://127.0.0.1:8000';
     const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : '';
+    console.log('[ChatWS] Token present:', !!token, 'Token length:', token?.length);
+    console.log('[ChatWS] Connecting to:', `${baseWsUrl}/ws/chat/${id}/`);
     return `${baseWsUrl}/ws/chat/${id}/?token=${token}`;
   };
 
   useEffect(() => {
-    if (!conversationId) {
-      if (ws.current) {
-        ws.current.close();
-        ws.current = null;
-        setSocket(null);
+    mountedRef.current = true;
+
+    // ─── CLEANUP PREVIOUS SOCKET IF CONVERSATION CHANGED ────────────────────
+    if (chatWsInstance && chatWsConversationId !== conversationId) {
+      console.log(`[ChatWS] CLOSED: ${chatWsConversationId} — switching to ${conversationId}`);
+      chatWsInstance.onclose = null; // Prevent reconnect attempts
+      chatWsInstance.close();
+      chatWsInstance = null;
+      chatWsConversationId = null;
+      setSocket(null);
+      
+      if (chatWsReconnectTimeout) {
+        clearTimeout(chatWsReconnectTimeout);
+        chatWsReconnectTimeout = null;
       }
+      chatWsRetryCount = 0;
+    }
+
+    // ─── NO CONVERSATION SELECTED ───────────────────────────────────────────
+    if (!conversationId) {
       return;
     }
 
-    let reconnectTimeoutId: NodeJS.Timeout | null = null;
-    let retryCount = 0;
-    let isComponentMounted = true;
-
     const connect = () => {
       const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
-      if (!token) return;
-      if (ws.current) return;
+      if (!token) {
+        console.warn('[ChatWS] Skipped: no token');
+        return;
+      }
 
+      // CRITICAL: Check if socket already exists for this conversation
+      if (chatWsInstance && chatWsConversationId === conversationId) {
+        const state = chatWsInstance.readyState;
+        if (state === WebSocket.OPEN || state === WebSocket.CONNECTING) {
+          console.log(`[ChatWS] Already connected to ${conversationId} — skipping`);
+          return;
+        }
+      }
+
+      console.log(`[ChatWS] CREATED: ${conversationId}`);
       const socket = new WebSocket(getWsUrl(conversationId));
+      chatWsInstance = socket;
+      chatWsConversationId = conversationId;
 
       socket.onopen = () => {
-        retryCount = 0;
+        console.log(`[ChatWS] CONNECTED: ${conversationId}`);
+        chatWsRetryCount = 0;
         setSocket(socket);
       };
 
@@ -53,31 +100,38 @@ export const useChatWebSocket = (conversationId: string | null) => {
           const data = JSON.parse(event.data);
 
           switch (data.type) {
-
-            // ─── PRIMARY message path ───────────────────────────────────────────────
-            // The backend's chat_message handler sends type: "message" with data: {...}
-            // This is the authoritative source for adding messages to the store.
             case 'message': {
               const newMessage: Message = data.data || data;
+              const msgId = String(newMessage.id || '');
+              
+              // Deduplicate: check if we've already processed this message
+              if (msgId && chatProcessedMessageIds.has(`chat_${msgId}`)) {
+                return;
+              }
+              if (msgId) {
+                chatProcessedMessageIds.add(`chat_${msgId}`);
+                cleanupProcessedIds();
+              }
+              
               addMessage(newMessage);
               break;
             }
 
-            // ─── SECONDARY paths: new_message / forwarded_message ─────────────────
-            // The backend ALSO broadcasts new_message to the same room group.
-            // This means for every sent message, both 'message' AND 'new_message'
-            // arrive on this same socket — causing duplicates.
-            //
-            // FIX: addMessage has built-in ID-based dedup in the store, so calling it
-            // here is safe — but ONLY works if the IDs match exactly (same type).
-            // Ensure IDs are always stringified before comparing in addMessage (done in store).
-            // For forwarded_message, last_message is the only payload so we must add it.
             case 'new_message':
             case 'forwarded_message': {
               const msgPayload: Message | undefined = data.last_message || data.data;
               if (msgPayload) {
-                // addMessage dedup in the store (String(m.id) === String(safe.id)) handles
-                // the case where 'message' already inserted this — no visible duplicate.
+                const msgId = String(msgPayload.id || '');
+                
+                // Deduplicate
+                if (msgId && chatProcessedMessageIds.has(`chat_${msgId}`)) {
+                  return;
+                }
+                if (msgId) {
+                  chatProcessedMessageIds.add(`chat_${msgId}`);
+                  cleanupProcessedIds();
+                }
+                
                 addMessage(msgPayload);
               }
               break;
@@ -105,7 +159,6 @@ export const useChatWebSocket = (conversationId: string | null) => {
             }
 
             case 'typing': {
-              // Always string — matches participant ID comparison in MessageList
               setTyping(String(data.user_id));
               break;
             }
@@ -140,57 +193,89 @@ export const useChatWebSocket = (conversationId: string | null) => {
         }
       };
 
-      socket.onerror = () => {};
-
-      socket.onclose = (event) => {
-        setSocket(null);
-        ws.current = null;
-
-        if (event.code === 1008) {
-          console.warn('[ChatWS] Auth rejected');
-          return;
-        }
-
-        const delay = Math.min(1000 * Math.pow(2, retryCount), 10000);
-        retryCount++;
-
-        if (reconnectTimeoutId) clearTimeout(reconnectTimeoutId);
-        reconnectTimeoutId = setTimeout(() => {
-          if (isComponentMounted) connect();
-        }, delay);
+      socket.onerror = (err) => {
+        console.error(`[ChatWS] Error on ${conversationId}:`, err);
       };
 
-      ws.current = socket;
+      socket.onclose = (event) => {
+        console.log(`[ChatWS] CLOSED: ${conversationId} — code: ${event.code}`);
+        
+        // Only clear if this is still the active socket for this conversation
+        if (chatWsConversationId === conversationId) {
+          chatWsInstance = null;
+          chatWsConversationId = null;
+          setSocket(null);
+
+          if (event.code === 1008) {
+            console.warn('[ChatWS] Auth rejected — not retrying');
+            return;
+          }
+
+          // Only retry if component is still mounted and same conversation is active
+          if (mountedRef.current) {
+            const delay = Math.min(1000 * Math.pow(2, chatWsRetryCount), 10000);
+            chatWsRetryCount++;
+
+            if (chatWsReconnectTimeout) {
+              clearTimeout(chatWsReconnectTimeout);
+            }
+            chatWsReconnectTimeout = setTimeout(() => {
+              if (mountedRef.current && useChatStore.getState().activeConversationId === conversationId) {
+                connect();
+              }
+            }, delay);
+          }
+        }
+      };
     };
 
     connect();
 
-    const handleVisibilityChange = () => {
+    // Visibility change handler for this conversation
+    if (visibilityHandlerRef.current) {
+      document.removeEventListener('visibilitychange', visibilityHandlerRef.current);
+    }
+    
+    visibilityHandlerRef.current = () => {
       if (document.visibilityState === 'visible') {
-        if (!ws.current || ws.current.readyState !== WebSocket.OPEN) {
-          connect();
+        if (!chatWsInstance || chatWsInstance.readyState !== WebSocket.OPEN) {
+          if (useChatStore.getState().activeConversationId === conversationId) {
+            console.log(`[ChatWS] Visibility change — reconnecting to ${conversationId}`);
+            connect();
+          }
         }
       }
     };
-
-    document.addEventListener('visibilitychange', handleVisibilityChange);
+    document.addEventListener('visibilitychange', visibilityHandlerRef.current);
 
     return () => {
-      isComponentMounted = false;
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-      if (reconnectTimeoutId) clearTimeout(reconnectTimeoutId);
-      if (ws.current) {
-        ws.current.onclose = null;
-        ws.current.close();
-        ws.current = null;
+      mountedRef.current = false;
+      
+      if (visibilityHandlerRef.current) {
+        document.removeEventListener('visibilitychange', visibilityHandlerRef.current);
+        visibilityHandlerRef.current = null;
+      }
+      
+      if (chatWsReconnectTimeout) {
+        clearTimeout(chatWsReconnectTimeout);
+        chatWsReconnectTimeout = null;
+      }
+
+      // Close socket on cleanup (conversation change or unmount)
+      if (chatWsInstance && chatWsConversationId === conversationId) {
+        console.log(`[ChatWS] CLEANUP CLOSE: ${conversationId}`);
+        chatWsInstance.onclose = null;
+        chatWsInstance.close();
+        chatWsInstance = null;
+        chatWsConversationId = null;
         setSocket(null);
       }
     };
-  }, [conversationId, addMessage, addReadReceipt, updateMessage, removeMessage, setTyping, setSocket, updateMessageReactions]);
+  }, [conversationId, addMessage, addReadReceipt, updateMessage, removeMessage, setTyping, setSocket, updateMessageReactions, handleUnreadReset]);
 
   const sendMessage = useCallback((content: string, replyToId?: string) => {
-    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-      ws.current.send(JSON.stringify({
+    if (chatWsInstance && chatWsInstance.readyState === WebSocket.OPEN) {
+      chatWsInstance.send(JSON.stringify({
         action: 'send_message',
         message: content,
         type: 'text',
@@ -213,20 +298,20 @@ export const useChatWebSocket = (conversationId: string | null) => {
   }, [user, conversationId, updateConversationOnSend]);
 
   const sendDeleteMessage = useCallback((messageId: string, mode: 'me' | 'everyone') => {
-    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-      ws.current.send(JSON.stringify({ action: 'delete_message', message_id: messageId, mode }));
+    if (chatWsInstance && chatWsInstance.readyState === WebSocket.OPEN) {
+      chatWsInstance.send(JSON.stringify({ action: 'delete_message', message_id: messageId, mode }));
     }
   }, []);
 
   const sendReaction = useCallback((messageId: string, emoji: string) => {
-    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-      ws.current.send(JSON.stringify({ action: 'react', message_id: messageId, emoji }));
+    if (chatWsInstance && chatWsInstance.readyState === WebSocket.OPEN) {
+      chatWsInstance.send(JSON.stringify({ action: 'react', message_id: messageId, emoji }));
     }
   }, []);
 
   const sendTyping = useCallback(() => {
-    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-      ws.current.send(JSON.stringify({ action: 'typing' }));
+    if (chatWsInstance && chatWsInstance.readyState === WebSocket.OPEN) {
+      chatWsInstance.send(JSON.stringify({ action: 'typing' }));
     }
   }, []);
 
@@ -234,18 +319,25 @@ export const useChatWebSocket = (conversationId: string | null) => {
   const lastReadMessageId = useRef<string | null>(null);
 
   const sendReadReceipt = useCallback((messageId?: string) => {
-    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+    if (chatWsInstance && chatWsInstance.readyState === WebSocket.OPEN) {
       if (messageId && messageId === lastReadMessageId.current) return;
       const now = Date.now();
       if (!messageId && now - lastReadReceiptTime.current < 1000) return;
       lastReadReceiptTime.current = now;
       if (messageId) lastReadMessageId.current = messageId;
-      ws.current.send(JSON.stringify({
+      chatWsInstance.send(JSON.stringify({
         action: 'mark_read',
         ...(messageId ? { message_id: messageId } : {})
       }));
     }
   }, []);
 
-  return { sendMessage, sendDeleteMessage, sendTyping, sendReadReceipt, sendReaction, socketReadyState: ws.current?.readyState };
+  return { 
+    sendMessage, 
+    sendDeleteMessage, 
+    sendTyping, 
+    sendReadReceipt, 
+    sendReaction, 
+    socketReadyState: chatWsInstance?.readyState 
+  };
 };

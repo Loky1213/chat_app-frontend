@@ -139,16 +139,24 @@ export const useChatStore = create<ChatState>((set, get) => ({
   })),
 
   addReadReceipt: (userId, messageId) => set((state) => {
-    // FIX: only mark messages as read by others, never by the current user themselves.
-    // Previously the comparison was missing, so your own user_id was added to
-    // readReceiptsUserIds and isRead became true immediately for your own messages.
-    const updatedMessages = messageId
-      ? state.messages.map(m => {
-          if (String(m.id) !== String(messageId)) return m;
-          if (m.read_by?.includes(userId)) return m; // already recorded
-          return { ...m, read_by: [...(m.read_by || []), userId] };
-        })
-      : state.messages;
+    // FIX: When a read receipt arrives, update the specific message's read_by array.
+    // If no messageId is provided, mark ALL messages in the current conversation as read.
+    const userIdStr = String(userId);
+    
+    const updatedMessages = state.messages.map(m => {
+      // If messageId is provided, only update that specific message
+      if (messageId && String(m.id) !== String(messageId)) {
+        return m;
+      }
+      
+      // Skip if already recorded (normalize to string for comparison)
+      const existingReadBy = m.read_by || [];
+      if (existingReadBy.some(id => String(id) === userIdStr)) {
+        return m;
+      }
+      
+      return { ...m, read_by: [...existingReadBy, userId] };
+    });
 
     return {
       readReceiptsUserIds: [...new Set([...state.readReceiptsUserIds, userId])],

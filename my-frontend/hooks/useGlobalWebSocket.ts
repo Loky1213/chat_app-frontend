@@ -2,46 +2,67 @@ import { useEffect, useRef } from 'react';
 import { useChatStore } from '@/store/useChatStore';
 import { usePresenceStore } from '@/store/usePresenceStore';
 
-// GLOBAL SINGLETONS — one shared connection for the entire app lifetime
+// ─── GLOBAL SINGLETON STATE ─────────────────────────────────────────────────
+// These module-level variables ensure only ONE global WebSocket exists
+// across all component instances and React strict mode double-mounts.
 let globalWsInstance: WebSocket | null = null;
 let globalWsRetryCount = 0;
 let globalWsReconnectTimeout: NodeJS.Timeout | null = null;
-let globalWsVisibilityListenerAdded = false;
-// FIX: cache the decoded user_id so we don't re-decode on every message
+let globalWsVisibilityHandler: (() => void) | null = null;
 let cachedCurrentUserId: string | undefined = undefined;
+// Track processed message IDs to prevent duplicate event handling
+const processedMessageIds = new Set<string>();
+const MAX_PROCESSED_IDS = 500; // Prevent memory leak
+
+const getToken = (): string | null => {
+  if (typeof window === 'undefined') return null;
+  return localStorage.getItem('access_token');
+};
+
+const decodeToken = (token: string): any => {
+  try {
+    const base64Url = token.split('.')[1];
+    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+    const jsonPayload = decodeURIComponent(
+      atob(base64)
+        .split('')
+        .map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
+        .join('')
+    );
+    return JSON.parse(jsonPayload);
+  } catch {
+    return null;
+  }
+};
+
+const getWsUrl = (): string => {
+  const baseWsUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://127.0.0.1:8000';
+  const token = getToken();
+  console.log('[GlobalWS] Token present:', !!token, 'Token length:', token?.length);
+  console.log('[GlobalWS] Connecting to:', `${baseWsUrl}/ws/notifications/`);
+  return `${baseWsUrl}/ws/notifications/?token=${token}`;
+};
+
+// Cleanup old processed IDs to prevent memory leak
+const cleanupProcessedIds = () => {
+  if (processedMessageIds.size > MAX_PROCESSED_IDS) {
+    const idsArray = Array.from(processedMessageIds);
+    const toRemove = idsArray.slice(0, idsArray.length - MAX_PROCESSED_IDS / 2);
+    toRemove.forEach(id => processedMessageIds.delete(id));
+  }
+};
 
 export const useGlobalWebSocket = () => {
-  const mounted = useRef(true);
-
-  const getToken = (): string | null => {
-    if (typeof window === 'undefined') return null;
-    return localStorage.getItem('access_token');
-  };
-
-  const decodeToken = (token: string): any => {
-    try {
-      const base64Url = token.split('.')[1];
-      const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-      const jsonPayload = decodeURIComponent(
-        atob(base64)
-          .split('')
-          .map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
-          .join('')
-      );
-      return JSON.parse(jsonPayload);
-    } catch {
-      return null;
-    }
-  };
-
-  const getWsUrl = (): string => {
-    const baseWsUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://127.0.0.1:8000';
-    const token = getToken();
-    return `${baseWsUrl}/ws/notifications/?token=${token}`;
-  };
+  const mountedRef = useRef(true);
+  const initializedRef = useRef(false);
 
   useEffect(() => {
-    mounted.current = true;
+    // Prevent multiple initializations from React strict mode or re-renders
+    if (initializedRef.current) {
+      return;
+    }
+    initializedRef.current = true;
+    mountedRef.current = true;
 
     const connect = () => {
       const token = getToken();
@@ -51,17 +72,25 @@ export const useGlobalWebSocket = () => {
         return;
       }
 
-      if (globalWsInstance && globalWsInstance.readyState === WebSocket.OPEN) {
-        return;
+      // CRITICAL: Check if socket already exists and is open/connecting
+      if (globalWsInstance) {
+        const state = globalWsInstance.readyState;
+        if (state === WebSocket.OPEN || state === WebSocket.CONNECTING) {
+          console.log('[GlobalWS] Already connected or connecting — skipping');
+          return;
+        }
+        // Socket exists but is closing/closed — clean it up
+        globalWsInstance = null;
       }
 
-      // FIX: decode user_id once per connection, not on every message
       cachedCurrentUserId = token ? String(decodeToken(token)?.user_id) : undefined;
 
+      console.log('[GlobalWS] CREATED — establishing connection');
       const socket = new WebSocket(getWsUrl());
       globalWsInstance = socket;
 
       socket.onopen = () => {
+        console.log('[GlobalWS] CONNECTED');
         globalWsRetryCount = 0;
 
         const state = useChatStore.getState();
@@ -83,20 +112,27 @@ export const useGlobalWebSocket = () => {
             messageObj?.conversation_id ||
             data.conversation_id;
 
-          // FIX: For NEW_MESSAGE / FORWARDED_MESSAGE, only update the sidebar
-          // (conversations list). The chat-scoped socket (useChatWebSocket) handles
-          // adding the actual message to state.messages to avoid duplicates.
+          // For message events, deduplicate by message ID
           if (
             eventType === 'NEW_MESSAGE' ||
             eventType === 'FORWARDED_MESSAGE' ||
             eventType === 'MESSAGE'
           ) {
+            const msgId = String(messageObj?.id || data.id || '');
+            if (msgId && processedMessageIds.has(`global_${msgId}`)) {
+              // Already processed this message in global socket — skip
+              return;
+            }
+            if (msgId) {
+              processedMessageIds.add(`global_${msgId}`);
+              cleanupProcessedIds();
+            }
+
             const normalizedPayload = {
               ...data,
               last_message: messageObj,
               conversation_id: effectiveChatId
             };
-            // Pass cached userId — no re-decode per message
             useChatStore.getState().handleIncomingMessage(normalizedPayload, cachedCurrentUserId);
           }
 
@@ -119,6 +155,18 @@ export const useGlobalWebSocket = () => {
 
           if (data.type === 'presence_update') {
             const { user_id, status } = data;
+            const currentUserId = usePresenceStore.getState().currentUserId;
+            
+            console.log('[GlobalWS] Presence update received:', { user_id, status, currentUserId });
+            
+            // CRITICAL: Ignore presence updates for the CURRENT user.
+            // Your own presence is managed by the toggle + API, not by WebSocket broadcasts.
+            // Without this, WebSocket events can override your toggle state due to race conditions.
+            if (currentUserId && String(user_id) === String(currentUserId)) {
+              console.log('[GlobalWS] IGNORING presence update for self');
+              return;
+            }
+            
             if (status === 'user_online') {
               usePresenceStore.getState().setUserOnline(String(user_id));
             } else if (status === 'user_offline') {
@@ -130,11 +178,12 @@ export const useGlobalWebSocket = () => {
         }
       };
 
-      socket.onerror = () => {
-        // Errors are expected on transient network issues; onclose handles retry
+      socket.onerror = (err) => {
+        console.error('[GlobalWS] Error:', err);
       };
 
       socket.onclose = (event) => {
+        console.log('[GlobalWS] CLOSED — code:', event.code);
         globalWsInstance = null;
         cachedCurrentUserId = undefined;
 
@@ -151,7 +200,7 @@ export const useGlobalWebSocket = () => {
         }
 
         globalWsReconnectTimeout = setTimeout(() => {
-          if (mounted.current) {
+          if (mountedRef.current) {
             connect();
           }
         }, delay);
@@ -160,26 +209,27 @@ export const useGlobalWebSocket = () => {
 
     connect();
 
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        if (!globalWsInstance || globalWsInstance.readyState !== WebSocket.OPEN) {
-          connect();
+    // Set up visibility change handler (only once)
+    if (!globalWsVisibilityHandler && typeof window !== 'undefined') {
+      globalWsVisibilityHandler = () => {
+        if (document.visibilityState === 'visible') {
+          if (!globalWsInstance || globalWsInstance.readyState !== WebSocket.OPEN) {
+            console.log('[GlobalWS] Visibility change — reconnecting');
+            connect();
+          }
         }
-      }
-    };
-
-    // FIX: track the handler reference so we can remove it properly on cleanup
-    if (!globalWsVisibilityListenerAdded && typeof window !== 'undefined') {
-      document.addEventListener('visibilitychange', handleVisibilityChange);
-      globalWsVisibilityListenerAdded = true;
+      };
+      document.addEventListener('visibilitychange', globalWsVisibilityHandler);
     }
 
     return () => {
-      mounted.current = false;
+      mountedRef.current = false;
+      initializedRef.current = false;
       if (globalWsReconnectTimeout) {
         clearTimeout(globalWsReconnectTimeout);
+        globalWsReconnectTimeout = null;
       }
-      // Do NOT close the global socket here — it lives beyond component unmount
+      // Do NOT close the global socket on unmount — it's shared across the app
     };
   }, []);
 };

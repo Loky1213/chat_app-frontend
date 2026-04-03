@@ -11,7 +11,8 @@ interface PresenceState {
   hydratePresence: () => Promise<void>;
   setUserOnline: (id: string) => void;
   setUserOffline: (id: string) => void;
-  toggleHideOnline: (value: boolean) => Promise<void>;
+  toggleHideOnline: () => Promise<void>;
+  resetPresence: () => void;
 }
 
 export const usePresenceStore = create<PresenceState>((set, get) => ({
@@ -20,15 +21,37 @@ export const usePresenceStore = create<PresenceState>((set, get) => ({
   isInitialized: false,
   currentUserId: null,
 
-  setCurrentUserId: (id) => set({ currentUserId: id !== null ? String(id) : null }),
+  setCurrentUserId: (id) => {
+    const newId = id !== null ? String(id) : null;
+    const current = get().currentUserId;
+    
+    // FIX: If user ID changes (different user logged in), reset the store
+    // to force re-hydration with the new user's presence state.
+    if (current !== null && current !== newId) {
+      console.log('[Presence] User changed, resetting store');
+      set({
+        currentUserId: newId,
+        isHidden: false,
+        isInitialized: false,
+        onlineUsers: new Set<string>(),
+      });
+    } else {
+      set({ currentUserId: newId });
+    }
+  },
 
   hydratePresence: async () => {
+    const userId = get().currentUserId;
+    console.log('[Presence] Hydrating for user:', userId);
+    
     try {
       const [onlineIds, myPresence] = await Promise.all([
         chatApi.getOnlineUsers(),
         chatApi.getMyPresence(),
       ]);
 
+      console.log('[Presence] Hydrated - online:', onlineIds, 'isHidden:', myPresence.is_hidden);
+      
       set({
         onlineUsers: new Set(onlineIds.map(String)),
         isHidden: myPresence.is_hidden ?? false,
@@ -44,7 +67,7 @@ export const usePresenceStore = create<PresenceState>((set, get) => ({
     set((state) => {
       const updated = new Set(state.onlineUsers);
       updated.add(String(id));
-      return { onlineUsers: updated };
+      return { onlineUsers: new Set(updated) };
     });
   },
 
@@ -52,25 +75,31 @@ export const usePresenceStore = create<PresenceState>((set, get) => ({
     set((state) => {
       const updated = new Set(state.onlineUsers);
       updated.delete(String(id));
-      return { onlineUsers: updated };
+      return { onlineUsers: new Set(updated) };
     });
   },
 
-  toggleHideOnline: async (hideOnline: boolean) => {
-    // FIX: Guard against toggling before hydration has completed.
-    // Without this, the first toggle fires with stale isHidden: false,
-    // then hydratePresence overwrites it and the toggle visually snaps back.
-    if (!get().isInitialized) return;
+  // Toggle without parameter - always uses current store state to avoid stale closures
+  toggleHideOnline: async () => {
+    if (!get().isInitialized) {
+      console.warn('[Presence] Toggle blocked - not initialized');
+      return;
+    }
 
     const prev = get().isHidden;
     const userId = get().currentUserId;
+    const hideOnline = !prev; // Toggle the current value
 
+    console.log('[Presence] Toggling from', prev, 'to', hideOnline);
+    
     // Optimistic update
     set({ isHidden: hideOnline });
 
     try {
-      await chatApi.toggleHideOnline(hideOnline);
+      const response = await chatApi.toggleHideOnline(hideOnline);
+      console.log('[Presence] API toggle success, response:', response, 'isHidden is now:', get().isHidden);
 
+      // Update local onlineUsers set to reflect the change
       if (userId) {
         set((state) => {
           const updated = new Set(state.onlineUsers);
@@ -79,12 +108,34 @@ export const usePresenceStore = create<PresenceState>((set, get) => ({
           } else {
             updated.add(String(userId));
           }
-          return { onlineUsers: updated };
+          return { onlineUsers: new Set(updated) };
         });
       }
-    } catch (err) {
-      console.error('[Presence] Failed to toggle:', err);
-      set({ isHidden: prev }); // rollback on failure
+    } catch (err: any) {
+      console.error('[Presence] Toggle failed:', err);
+      console.error('[Presence] Error response:', err?.response?.data);
+      console.error('[Presence] Error status:', err?.response?.status);
+      set({ isHidden: prev }); // Rollback on failure
     }
   },
+
+  resetPresence: () => {
+    console.log('[Presence] Resetting store');
+    set({
+      onlineUsers: new Set<string>(),
+      isHidden: false,
+      isInitialized: false,
+      currentUserId: null,
+    });
+  },
 }));
+
+// Debug: Subscribe to ALL state changes
+if (typeof window !== 'undefined') {
+  usePresenceStore.subscribe((state, prevState) => {
+    if (state.isHidden !== prevState.isHidden) {
+      console.log('[Presence] isHidden CHANGED:', prevState.isHidden, '→', state.isHidden);
+      console.trace('[Presence] Stack trace for isHidden change');
+    }
+  });
+}
