@@ -16,11 +16,10 @@ export const useChatWebSocket = (conversationId: string | null) => {
   const handleUnreadReset = useChatStore((s) => s.handleUnreadReset);
   const ws = useRef<WebSocket | null>(null);
 
-  const getWsUrl = (id: string) => {
-    // Using localhost to match the backend CORS_ALLOWED_ORIGINS configuration
-    const baseWbUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://127.0.0.1:8000';
+  const getWsUrl = (id: string): string => {
+    const baseWsUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://127.0.0.1:8000';
     const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : '';
-    return `${baseWbUrl}/ws/chat/${id}/?token=${token}`;
+    return `${baseWsUrl}/ws/chat/${id}/?token=${token}`;
   };
 
   useEffect(() => {
@@ -40,15 +39,11 @@ export const useChatWebSocket = (conversationId: string | null) => {
     const connect = () => {
       const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
       if (!token) return;
-
       if (ws.current) return;
 
-      console.log(`WS INIT (Chat: ${conversationId})`);
-      const url = getWsUrl(conversationId);
-      const socket = new WebSocket(url);
+      const socket = new WebSocket(getWsUrl(conversationId));
 
       socket.onopen = () => {
-        console.log(`WS OPEN (Chat: ${conversationId})`);
         retryCount = 0;
         setSocket(socket);
       };
@@ -56,28 +51,45 @@ export const useChatWebSocket = (conversationId: string | null) => {
       socket.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
-          
+
           switch (data.type) {
+
+            // ─── PRIMARY message path ───────────────────────────────────────────────
+            // The backend's chat_message handler sends type: "message" with data: {...}
+            // This is the authoritative source for adding messages to the store.
             case 'message': {
               const newMessage: Message = data.data || data;
               addMessage(newMessage);
               break;
             }
+
+            // ─── SECONDARY paths: new_message / forwarded_message ─────────────────
+            // The backend ALSO broadcasts new_message to the same room group.
+            // This means for every sent message, both 'message' AND 'new_message'
+            // arrive on this same socket — causing duplicates.
+            //
+            // FIX: addMessage has built-in ID-based dedup in the store, so calling it
+            // here is safe — but ONLY works if the IDs match exactly (same type).
+            // Ensure IDs are always stringified before comparing in addMessage (done in store).
+            // For forwarded_message, last_message is the only payload so we must add it.
             case 'new_message':
             case 'forwarded_message': {
-              console.log(`[WS Chat] ${data.type} received in conversation ${conversationId}`);
-              const newMessage: Message = data.last_message;
-              if (newMessage) {
-                addMessage(newMessage);
+              const msgPayload: Message | undefined = data.last_message || data.data;
+              if (msgPayload) {
+                // addMessage dedup in the store (String(m.id) === String(safe.id)) handles
+                // the case where 'message' already inserted this — no visible duplicate.
+                addMessage(msgPayload);
               }
               break;
             }
-            case 'read_receipt': 
+
+            case 'read_receipt':
             case 'message_seen': {
-              const userIdMapping = Number(data.user_id);
-              addReadReceipt(userIdMapping, data.message_id);
+              const userIdNum = Number(data.user_id);
+              addReadReceipt(userIdNum, data.message_id);
               break;
             }
+
             case 'message_deleted': {
               if (data.mode === 'me') {
                 removeMessage(data.message_id);
@@ -91,23 +103,26 @@ export const useChatWebSocket = (conversationId: string | null) => {
               }
               break;
             }
+
             case 'typing': {
-              setTyping(Number(data.user_id));
+              // Always string — matches participant ID comparison in MessageList
+              setTyping(String(data.user_id));
               break;
             }
+
             case 'reaction_update': {
               if (data.message_id && data.reactions) {
                 updateMessageReactions(data.message_id, data.reactions);
               }
               break;
             }
+
             case 'unread_reset': {
               const chatId = data.conversation_id || data.chat_id;
-              if (chatId) {
-                handleUnreadReset(String(chatId));
-              }
+              if (chatId) handleUnreadReset(String(chatId));
               break;
             }
+
             case 'group_update':
             case 'group_updated':
             case 'admin_updated':
@@ -121,21 +136,18 @@ export const useChatWebSocket = (conversationId: string | null) => {
             }
           }
         } catch (err) {
-          console.error('Error parsing WS message:', err);
+          console.error('[ChatWS] Parse error:', err);
         }
       };
 
-      socket.onerror = (error) => {
-        console.warn('WS ERROR (expected sometimes)', error);
-      };
+      socket.onerror = () => {};
 
       socket.onclose = (event) => {
-        console.log(`WS CLOSED (Chat: ${conversationId}):`, event.code, event.reason);
         setSocket(null);
         ws.current = null;
 
         if (event.code === 1008) {
-          console.warn('Backend rejected auth token for Chat socket');
+          console.warn('[ChatWS] Auth rejected');
           return;
         }
 
@@ -166,10 +178,9 @@ export const useChatWebSocket = (conversationId: string | null) => {
     return () => {
       isComponentMounted = false;
       document.removeEventListener('visibilitychange', handleVisibilityChange);
-      
       if (reconnectTimeoutId) clearTimeout(reconnectTimeoutId);
       if (ws.current) {
-        ws.current.onclose = null; 
+        ws.current.onclose = null;
         ws.current.close();
         ws.current = null;
         setSocket(null);
@@ -186,7 +197,6 @@ export const useChatWebSocket = (conversationId: string | null) => {
         ...(replyToId ? { reply_to: replyToId } : {})
       }));
 
-      // Optimistic UI for sender's sidebar
       if (user && conversationId) {
         updateConversationOnSend({
           id: `temp_${Date.now()}`,
@@ -198,35 +208,25 @@ export const useChatWebSocket = (conversationId: string | null) => {
         });
       }
     } else {
-      console.warn('Cannot send message: WebSocket is not open');
+      console.warn('[ChatWS] Cannot send: socket not open');
     }
   }, [user, conversationId, updateConversationOnSend]);
 
   const sendDeleteMessage = useCallback((messageId: string, mode: 'me' | 'everyone') => {
     if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-      ws.current.send(JSON.stringify({
-        action: 'delete_message',
-        message_id: messageId,
-        mode
-      }));
+      ws.current.send(JSON.stringify({ action: 'delete_message', message_id: messageId, mode }));
     }
   }, []);
 
   const sendReaction = useCallback((messageId: string, emoji: string) => {
     if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-      ws.current.send(JSON.stringify({
-        action: 'react',
-        message_id: messageId,
-        emoji
-      }));
+      ws.current.send(JSON.stringify({ action: 'react', message_id: messageId, emoji }));
     }
   }, []);
 
   const sendTyping = useCallback(() => {
     if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-      ws.current.send(JSON.stringify({
-        action: 'typing'
-      }));
+      ws.current.send(JSON.stringify({ action: 'typing' }));
     }
   }, []);
 
@@ -235,18 +235,11 @@ export const useChatWebSocket = (conversationId: string | null) => {
 
   const sendReadReceipt = useCallback((messageId?: string) => {
     if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-      // Deduplicate consecutive identical receipts
       if (messageId && messageId === lastReadMessageId.current) return;
-      
       const now = Date.now();
-      // Throttle global mark-read (empty messageId) to at most once per second
       if (!messageId && now - lastReadReceiptTime.current < 1000) return;
-
       lastReadReceiptTime.current = now;
-      if (messageId) {
-        lastReadMessageId.current = messageId;
-      }
-
+      if (messageId) lastReadMessageId.current = messageId;
       ws.current.send(JSON.stringify({
         action: 'mark_read',
         ...(messageId ? { message_id: messageId } : {})

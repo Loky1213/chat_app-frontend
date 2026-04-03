@@ -35,7 +35,7 @@ export const usePresenceStore = create<PresenceState>((set, get) => ({
         isInitialized: true,
       });
     } catch (err) {
-      console.error('Presence hydration failed:', err);
+      console.error('[Presence] Hydration failed:', err);
       set({ isInitialized: true });
     }
   },
@@ -56,17 +56,21 @@ export const usePresenceStore = create<PresenceState>((set, get) => ({
     });
   },
 
-  toggleHideOnline: async (hideOnline) => {
+  toggleHideOnline: async (hideOnline: boolean) => {
+    // FIX: Guard against toggling before hydration has completed.
+    // Without this, the first toggle fires with stale isHidden: false,
+    // then hydratePresence overwrites it and the toggle visually snaps back.
+    if (!get().isInitialized) return;
+
     const prev = get().isHidden;
     const userId = get().currentUserId;
 
-    // Optimistic update for toggle UI
+    // Optimistic update
     set({ isHidden: hideOnline });
 
     try {
       await chatApi.toggleHideOnline(hideOnline);
 
-      // Immediately update own presence in the local Set
       if (userId) {
         set((state) => {
           const updated = new Set(state.onlineUsers);
@@ -79,8 +83,8 @@ export const usePresenceStore = create<PresenceState>((set, get) => ({
         });
       }
     } catch (err) {
-      console.error('Failed to toggle hide online:', err);
-      set({ isHidden: prev }); // rollback
+      console.error('[Presence] Failed to toggle:', err);
+      set({ isHidden: prev }); // rollback on failure
     }
   },
 }));

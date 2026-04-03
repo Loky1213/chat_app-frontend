@@ -1,10 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
 import { useChatStore } from '@/store/useChatStore';
 import { usePresenceStore } from '@/store/usePresenceStore';
-import { chatApi } from '@/services/api/chat';
 import { Message } from '@/types/chat';
 import { ConversationList } from './ConversationList';
 import { MessageList } from './MessageList';
@@ -19,7 +17,6 @@ export const ChatContainer = () => {
   const conversations = useChatStore((state) => state.conversations);
   const fetchConversations = useChatStore((state) => state.fetchConversations);
   const activeConversationId = useChatStore((state) => state.activeConversationId);
-  const setMessages = useChatStore((state) => state.setMessages);
   const onlineUsers = usePresenceStore((s) => s.onlineUsers);
   const [showGroupInfo, setShowGroupInfo] = useState(false);
   const { user: currentUser } = useAuth();
@@ -40,36 +37,30 @@ export const ChatContainer = () => {
 
   const activeConversation = conversations.find(c => String(c.id) === String(activeConversationId));
 
-  const isPrivateChat = activeConversation && activeConversation.participants.length <= 2 && !activeConversation.name;
-  const otherParticipant = isPrivateChat ? activeConversation.participants.find(p => String(p.id) !== String(currentUser?.id)) : null;
+  const isPrivateChat = activeConversation &&
+    activeConversation.participants.length <= 2 &&
+    !activeConversation.name;
+  const otherParticipant = isPrivateChat
+    ? activeConversation.participants.find(p => String(p.id) !== String(currentUser?.id))
+    : null;
   const isOnline = otherParticipant ? onlineUsers.has(String(otherParticipant.id)) : false;
 
-  // Initialize Conversation List
+  // Initialize conversation list on mount
   useEffect(() => {
     fetchConversations();
   }, [fetchConversations]);
 
-  // Load Messages when Active Conversation Changes
+  // FIX: Use the store's fetchMessages instead of calling chatApi directly.
+  // The store normalizes messages consistently; calling chatApi directly
+  // bypasses normalizeMessages and can produce differently shaped objects.
   useEffect(() => {
     if (!activeConversationId) return;
-
-    const fetchMessages = async () => {
-      try {
-        const data = await chatApi.getMessages(activeConversationId);
-        const messagesArray = Array.isArray(data) ? data : [];
-        setMessages([...messagesArray].reverse());
-      } catch (error) {
-        console.error('Failed to load messages:', error);
-      }
-    };
-
-    fetchMessages();
-  }, [activeConversationId, setMessages]);
-
+    useChatStore.getState().fetchMessages(activeConversationId);
+  }, [activeConversationId]);
 
   return (
     <div className="flex h-screen bg-gray-100 font-sans text-gray-900 border overflow-hidden">
-      {/* Sidebar: List of Conversations */}
+      {/* Sidebar */}
       <ConversationList />
 
       {/* Main Chat Area */}
@@ -78,15 +69,21 @@ export const ChatContainer = () => {
           <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-white shadow-sm z-10">
             <div>
               <h2 className="font-bold text-gray-800 text-lg flex items-center gap-2">
-                {activeConversation.name || activeConversation.participants.filter(p => String(p.id) !== String(currentUser?.id)).map(p => p.username).join(', ') || 'Chat'}
+                {activeConversation.name ||
+                  activeConversation.participants
+                    .filter(p => String(p.id) !== String(currentUser?.id))
+                    .map(p => p.username)
+                    .join(', ') ||
+                  'Chat'}
               </h2>
               {activeConversation.participants.length > 2 ? (
-                <div className="text-xs text-gray-500">{activeConversation.participants.length} participants</div>
+                <div className="text-xs text-gray-500">
+                  {activeConversation.participants.length} participants
+                </div>
               ) : (
                 isOnline && <div className="text-xs text-green-500 font-medium">Online</div>
               )}
             </div>
-            {/* Show Info button ONLY for group chats */}
             {(activeConversation.participants.length > 2 || activeConversation.name) && (
               <button
                 onClick={() => setShowGroupInfo(true)}
@@ -99,8 +96,18 @@ export const ChatContainer = () => {
           </div>
         )}
 
-        <MessageList sendReadReceipt={sendReadReceipt} sendDeleteMessage={sendDeleteMessage} onReply={setReplyMessage} sendReaction={sendReaction} />
-        <MessageInput sendMessage={sendMessage} sendTyping={sendTyping} replyMessage={replyMessage} onCancelReply={() => setReplyMessage(null)} />
+        <MessageList
+          sendReadReceipt={sendReadReceipt}
+          sendDeleteMessage={sendDeleteMessage}
+          onReply={setReplyMessage}
+          sendReaction={sendReaction}
+        />
+        <MessageInput
+          sendMessage={sendMessage}
+          sendTyping={sendTyping}
+          replyMessage={replyMessage}
+          onCancelReply={() => setReplyMessage(null)}
+        />
 
         {showGroupInfo && <GroupManagement onClose={() => setShowGroupInfo(false)} />}
       </div>

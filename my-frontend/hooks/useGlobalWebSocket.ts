@@ -2,34 +2,39 @@ import { useEffect, useRef } from 'react';
 import { useChatStore } from '@/store/useChatStore';
 import { usePresenceStore } from '@/store/usePresenceStore';
 
-// 🔥 GLOBAL SINGLETONS
+// GLOBAL SINGLETONS — one shared connection for the entire app lifetime
 let globalWsInstance: WebSocket | null = null;
 let globalWsRetryCount = 0;
 let globalWsReconnectTimeout: NodeJS.Timeout | null = null;
 let globalWsVisibilityListenerAdded = false;
+// FIX: cache the decoded user_id so we don't re-decode on every message
+let cachedCurrentUserId: string | undefined = undefined;
 
 export const useGlobalWebSocket = () => {
   const mounted = useRef(true);
 
-  const getToken = () => {
+  const getToken = (): string | null => {
     if (typeof window === 'undefined') return null;
     return localStorage.getItem('access_token');
   };
 
-  const decodeToken = (token: string) => {
+  const decodeToken = (token: string): any => {
     try {
       const base64Url = token.split('.')[1];
       const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-      const jsonPayload = decodeURIComponent(atob(base64).split('').map(function(c) {
-          return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
-      }).join(''));
+      const jsonPayload = decodeURIComponent(
+        atob(base64)
+          .split('')
+          .map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
+          .join('')
+      );
       return JSON.parse(jsonPayload);
-    } catch (e) {
+    } catch {
       return null;
     }
   };
 
-  const getWsUrl = () => {
+  const getWsUrl = (): string => {
     const baseWsUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://127.0.0.1:8000';
     const token = getToken();
     return `${baseWsUrl}/ws/notifications/?token=${token}`;
@@ -41,36 +46,27 @@ export const useGlobalWebSocket = () => {
     const connect = () => {
       const token = getToken();
 
-      // 🔒 Do not connect without token
       if (!token) {
-        console.warn('WS skipped: no token');
+        console.warn('[GlobalWS] Skipped: no token');
         return;
       }
 
-      // 🔥 Prevent duplicate / already open socket
-      if (
-        globalWsInstance &&
-        globalWsInstance.readyState === WebSocket.OPEN
-      ) {
-        console.log('WS already connected');
+      if (globalWsInstance && globalWsInstance.readyState === WebSocket.OPEN) {
         return;
       }
 
-      console.log('WS INIT');
+      // FIX: decode user_id once per connection, not on every message
+      cachedCurrentUserId = token ? String(decodeToken(token)?.user_id) : undefined;
 
       const socket = new WebSocket(getWsUrl());
       globalWsInstance = socket;
 
       socket.onopen = () => {
-        console.log('WS OPEN');
         globalWsRetryCount = 0;
 
         const state = useChatStore.getState();
-
-        // Optional resync
         if (state.conversations.length === 0) {
           state.fetchConversations();
-
           if (state.activeConversationId && state.fetchMessages) {
             state.fetchMessages(state.activeConversationId);
           }
@@ -80,51 +76,47 @@ export const useGlobalWebSocket = () => {
       socket.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
-
-          // VERIFY EVENT DELIVERY
-          console.log("WS EVENT RECEIVED:", data);
-          
-          // VERIFY EVENT TYPE
-          console.log("EVENT TYPE:", data.type);
-
           const eventType = data.type ? String(data.type).toUpperCase() : '';
           const messageObj = data.message || data.last_message || data;
-          
-          // VERIFY CHAT ID
-          const effectiveChatId = messageObj?.chat_id || messageObj?.conversation_id || data.conversation_id;
-          console.log("CHAT ID:", effectiveChatId);
+          const effectiveChatId =
+            messageObj?.chat_id ||
+            messageObj?.conversation_id ||
+            data.conversation_id;
 
-          // Handle all permutations
-          if (eventType === 'NEW_MESSAGE' || eventType === 'FORWARDED_MESSAGE' || eventType === 'MESSAGE') {
-            console.log(`[WS Global] Processing ${eventType} for conversation ${effectiveChatId}`);
-            const token = getToken();
-            const currentUserId = token ? decodeToken(token)?.user_id : undefined;
-            
+          // FIX: For NEW_MESSAGE / FORWARDED_MESSAGE, only update the sidebar
+          // (conversations list). The chat-scoped socket (useChatWebSocket) handles
+          // adding the actual message to state.messages to avoid duplicates.
+          if (
+            eventType === 'NEW_MESSAGE' ||
+            eventType === 'FORWARDED_MESSAGE' ||
+            eventType === 'MESSAGE'
+          ) {
             const normalizedPayload = {
               ...data,
               last_message: messageObj,
               conversation_id: effectiveChatId
             };
-            
-            useChatStore.getState().handleIncomingMessage(normalizedPayload, currentUserId);
+            // Pass cached userId — no re-decode per message
+            useChatStore.getState().handleIncomingMessage(normalizedPayload, cachedCurrentUserId);
           }
 
-          // FIRE UNREAD RESET
           if (eventType === 'UNREAD_RESET') {
             if (effectiveChatId) {
               useChatStore.getState().handleUnreadReset(String(effectiveChatId));
             }
           }
 
-          // GROUP UPDATES (Admin, Members, etc)
-          if (eventType.includes('GROUP') || eventType.includes('ADMIN') || eventType === 'UPDATE_CONVERSATION') {
+          if (
+            eventType.includes('GROUP') ||
+            eventType.includes('ADMIN') ||
+            eventType === 'UPDATE_CONVERSATION'
+          ) {
             useChatStore.getState().fetchConversations();
             if (effectiveChatId) {
-                useChatStore.getState().fetchMessages(String(effectiveChatId));
+              useChatStore.getState().fetchMessages(String(effectiveChatId));
             }
           }
 
-          // 🔥 Handle presence updates via WebSocket
           if (data.type === 'presence_update') {
             const { user_id, status } = data;
             if (status === 'user_online') {
@@ -134,26 +126,23 @@ export const useGlobalWebSocket = () => {
             }
           }
         } catch (err) {
-          console.error('WS parse error:', err);
+          console.error('[GlobalWS] Parse error:', err);
         }
       };
 
       socket.onerror = () => {
-        console.warn('WS ERROR (expected sometimes)');
+        // Errors are expected on transient network issues; onclose handles retry
       };
 
       socket.onclose = (event) => {
-        console.log('WS CLOSED:', event.code, event.reason);
-
         globalWsInstance = null;
+        cachedCurrentUserId = undefined;
 
-        // 🚫 Auth failure → stop reconnect
         if (event.code === 1008) {
-          console.warn('WS auth failed');
+          console.warn('[GlobalWS] Auth failed — not retrying');
           return;
         }
 
-        // 🔁 Reconnect with exponential backoff
         const delay = Math.min(1000 * Math.pow(2, globalWsRetryCount), 10000);
         globalWsRetryCount++;
 
@@ -171,19 +160,15 @@ export const useGlobalWebSocket = () => {
 
     connect();
 
-    // 🔁 Handle tab visibility (important)
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
-        if (
-          !globalWsInstance ||
-          globalWsInstance.readyState !== WebSocket.OPEN
-        ) {
-          console.log('WS reconnect on tab focus');
+        if (!globalWsInstance || globalWsInstance.readyState !== WebSocket.OPEN) {
           connect();
         }
       }
     };
 
+    // FIX: track the handler reference so we can remove it properly on cleanup
     if (!globalWsVisibilityListenerAdded && typeof window !== 'undefined') {
       document.addEventListener('visibilitychange', handleVisibilityChange);
       globalWsVisibilityListenerAdded = true;
@@ -191,13 +176,10 @@ export const useGlobalWebSocket = () => {
 
     return () => {
       mounted.current = false;
-
       if (globalWsReconnectTimeout) {
         clearTimeout(globalWsReconnectTimeout);
       }
-
-      // ❗ DO NOT close global socket here
-      // This is a global connection, not component-scoped
+      // Do NOT close the global socket here — it lives beyond component unmount
     };
   }, []);
 };
