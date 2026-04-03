@@ -64,18 +64,22 @@ export const usePresenceStore = create<PresenceState>((set, get) => ({
   },
 
   setUserOnline: (id) => {
+    console.log('[Presence] setUserOnline called for:', id);
     set((state) => {
       const updated = new Set(state.onlineUsers);
       updated.add(String(id));
-      return { onlineUsers: new Set(updated) };
+      console.log('[Presence] onlineUsers after add:', Array.from(updated));
+      return { onlineUsers: updated };
     });
   },
 
   setUserOffline: (id) => {
+    console.log('[Presence] setUserOffline called for:', id);
     set((state) => {
       const updated = new Set(state.onlineUsers);
       updated.delete(String(id));
-      return { onlineUsers: new Set(updated) };
+      console.log('[Presence] onlineUsers after delete:', Array.from(updated));
+      return { onlineUsers: updated };
     });
   },
 
@@ -99,7 +103,7 @@ export const usePresenceStore = create<PresenceState>((set, get) => ({
       const response = await chatApi.toggleHideOnline(hideOnline);
       console.log('[Presence] API toggle success, response:', response, 'isHidden is now:', get().isHidden);
 
-      // Update local onlineUsers set to reflect the change
+      // Update local onlineUsers set to reflect the change for SELF
       if (userId) {
         set((state) => {
           const updated = new Set(state.onlineUsers);
@@ -108,7 +112,8 @@ export const usePresenceStore = create<PresenceState>((set, get) => ({
           } else {
             updated.add(String(userId));
           }
-          return { onlineUsers: new Set(updated) };
+          console.log('[Presence] Updated onlineUsers for self:', Array.from(updated));
+          return { onlineUsers: updated };
         });
       }
     } catch (err: any) {

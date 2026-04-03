@@ -16,6 +16,7 @@ export interface Message {
   sender: User;
   created_at: string;
   read_by?: number[]; // list of user ids that have read this message
+  read_receipts_visible?: boolean; // whether to show read receipts for this message
   is_deleted?: boolean;
   deleted_for_everyone?: boolean;
   is_forwarded?: boolean;

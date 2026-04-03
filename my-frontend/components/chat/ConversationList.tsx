@@ -8,6 +8,7 @@ import { Users, MessageSquarePlus, MessageSquare } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { CreateGroupModal } from './CreateGroupModal';
 import { PresenceToggle } from './PresenceToggle';
+import { ReadReceiptsToggle } from './ReadReceiptsToggle';
 
 const ConversationItem = ({ conversationId, currentUser }: { conversationId: string, currentUser: any }) => {
   const conversation = useChatStore((state) => state.conversations.find(c => String(c.id) === String(conversationId)));
@@ -158,7 +159,10 @@ export const ConversationList = () => {
           </button>
         </div>
         </div>
-        <PresenceToggle />
+        <div className="flex flex-col gap-2">
+          <PresenceToggle />
+          <ReadReceiptsToggle />
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto">

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { useChatStore } from '@/store/useChatStore';
+import { useReadReceiptsStore } from '@/store/useReadReceiptsStore';
 import { Message } from '@/types/chat';
 import { useAuth } from '@/context/AuthContext';
 
@@ -113,6 +114,12 @@ export const useChatWebSocket = (conversationId: string | null) => {
                 cleanupProcessedIds();
               }
               
+              // Track if this is MY message and read receipts is currently disabled
+              const senderId = String(newMessage.sender?.id ?? (newMessage as any).sender_id);
+              if (user?.id && senderId === String(user.id) && msgId) {
+                useReadReceiptsStore.getState().trackMessageSentWhileDisabled(msgId);
+              }
+              
               addMessage(newMessage);
               break;
             }
@@ -130,6 +137,12 @@ export const useChatWebSocket = (conversationId: string | null) => {
                 if (msgId) {
                   chatProcessedMessageIds.add(`chat_${msgId}`);
                   cleanupProcessedIds();
+                }
+                
+                // Track if this is MY message and read receipts is currently disabled
+                const senderId = String(msgPayload.sender?.id ?? (msgPayload as any).sender_id);
+                if (user?.id && senderId === String(user.id) && msgId) {
+                  useReadReceiptsStore.getState().trackMessageSentWhileDisabled(msgId);
                 }
                 
                 addMessage(msgPayload);
@@ -319,6 +332,13 @@ export const useChatWebSocket = (conversationId: string | null) => {
   const lastReadMessageId = useRef<string | null>(null);
 
   const sendReadReceipt = useCallback((messageId?: string) => {
+    // If read receipts is OFF, don't send read receipts to others
+    const isReadReceiptsEnabled = useReadReceiptsStore.getState().isEnabled;
+    if (!isReadReceiptsEnabled) {
+      console.log('[ChatWS] Read receipts disabled, not sending read receipt');
+      return;
+    }
+    
     if (chatWsInstance && chatWsInstance.readyState === WebSocket.OPEN) {
       if (messageId && messageId === lastReadMessageId.current) return;
       const now = Date.now();

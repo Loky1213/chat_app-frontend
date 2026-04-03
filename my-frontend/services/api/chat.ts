@@ -83,4 +83,13 @@ export const chatApi = {
     const res = await apiClient.post('/api/chat/presence/toggle/', { hide_online: hideOnline });
     return res.data;
   },
+
+  // Read Receipts API
+  toggleReadReceipts: async (is_enabled: boolean) => {
+    if (typeof is_enabled !== 'boolean') {
+      throw new Error('is_enabled must be boolean');
+    }
+    const res = await apiClient.patch('/api/chat/read-receipts/', { is_enabled });
+    return res.data; // { is_enabled: boolean }
+  },
 };

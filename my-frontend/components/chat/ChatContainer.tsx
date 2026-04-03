@@ -52,6 +52,14 @@ export const ChatContainer = () => {
   const isOnline = !isCurrentUserHidden && otherParticipant 
     ? onlineUsers.has(String(otherParticipant.id)) 
     : false;
+    
+  // Debug: Log online status
+  console.log('[ChatContainer] Online check:', {
+    otherParticipantId: otherParticipant?.id,
+    isCurrentUserHidden,
+    onlineUsersArray: Array.from(onlineUsers),
+    isOnline
+  });
 
   // Initialize conversation list on mount
   useEffect(() => {

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useChatStore } from '@/store/useChatStore';
+import { useReadReceiptsStore } from '@/store/useReadReceiptsStore';
 import { format } from 'date-fns';
 import { Check, CheckCheck, Trash2, MoreVertical, X, Forward, Reply, SmilePlus, Plus } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
@@ -24,6 +25,7 @@ export const MessageList = ({ sendReadReceipt, sendDeleteMessage, onReply, sendR
   const typingUsers = useChatStore((state) => state.typingUsers);
   const conversations = useChatStore((state) => state.conversations);
   const socket = useChatStore((state) => state.socket);
+  const readReceiptsEnabled = useReadReceiptsStore((state) => state.isEnabled);
   const { user } = useAuth();
   const bottomRef = useRef<HTMLDivElement>(null);
   const observerRef = useRef<IntersectionObserver | null>(null);
@@ -144,11 +146,23 @@ export const MessageList = ({ sendReadReceipt, sendDeleteMessage, onReply, sendR
           const isReadByMe = !!(user && msg.read_by?.some(id => String(id) === String(user.id)));
 
           // Blue tick logic:
-          // 1. Check msg.read_by for any user OTHER than the sender (current user for outgoing messages)
-          // 2. For incoming messages, we don't show blue ticks at all
-          // 3. Only show blue tick if someone has actually read THIS specific message
+          // 1. Always show double tick for sent messages (gray = delivered)
+          // 2. Blue tick ONLY if:
+          //    - Message was NOT sent while read receipts was disabled
+          //    - AND local toggle is ON
+          //    - AND message's read_receipts_visible is not explicitly false (from backend)
+          //    - AND someone has actually read the message
           
           const readByArray: any[] = msg.read_by || (msg as any).read_receipts || (msg as any).seen_by || [];
+          
+          // Check if this message was sent while read receipts was disabled
+          const wasSentWhileDisabled = useReadReceiptsStore.getState().isMessageSentWhileDisabled(msg.id);
+          
+          // Check if blue ticks should be shown:
+          // - Message was NOT sent while disabled (permanent - never shows blue)
+          // - AND user's local toggle must be ON
+          // - AND message-level visibility (if backend sends it) must not be false
+          const canShowBlueTick = !wasSentWhileDisabled && readReceiptsEnabled && msg.read_receipts_visible !== false;
           
           // Check if any OTHER user has read this message
           const isReadByOther = readByArray.some((reader: any) => {
@@ -156,12 +170,8 @@ export const MessageList = ({ sendReadReceipt, sendDeleteMessage, onReply, sendR
             return readerId !== String(user?.id);
           });
 
-          // FIX: Only use readReceiptsUserIds if this specific message was marked as read.
-          // The readReceiptsUserIds contains ALL users who have sent read receipts in this conversation,
-          // but we only want to show blue tick if the message was explicitly read.
-          // Since the backend sends read_receipts per message, we rely on msg.read_by being populated.
-          // For live receipts, the addReadReceipt function updates msg.read_by directly.
-          const isRead = isMine && isReadByOther;
+          // Show BLUE tick only if: allowed AND someone read it
+          const isRead = isMine && canShowBlueTick && isReadByOther;
 
           return (
             <div
@@ -314,6 +324,7 @@ export const MessageList = ({ sendReadReceipt, sendDeleteMessage, onReply, sendR
 
               <div className={`flex items-center mt-1 text-xs text-gray-400 gap-1 ${isMine ? 'justify-end' : 'justify-start'}`}>
                 <span>{format(new Date(msg.created_at), 'hh:mm a')}</span>
+                {/* Always show double tick for sent messages, blue only if read AND allowed */}
                 {isMine && (
                   isRead
                     ? <CheckCheck size={14} className="text-blue-500" />
