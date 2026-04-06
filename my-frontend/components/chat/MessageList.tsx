@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { useChatStore } from '@/store/useChatStore';
 import { useReadReceiptsStore } from '@/store/useReadReceiptsStore';
 import { format } from 'date-fns';
-import { Check, CheckCheck, Trash2, MoreVertical, X, Forward, Reply, SmilePlus, Plus } from 'lucide-react';
+import { Check, CheckCheck, Trash2, MoreVertical, X, Forward, Reply, SmilePlus, Plus, Loader2 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { ForwardModal } from './ForwardModal';
 import { EmojiPickerModal } from './EmojiPickerModal';
@@ -25,10 +25,16 @@ export const MessageList = ({ sendReadReceipt, sendDeleteMessage, onReply, sendR
   const typingUsers = useChatStore((state) => state.typingUsers);
   const conversations = useChatStore((state) => state.conversations);
   const socket = useChatStore((state) => state.socket);
+  const nextCursor = useChatStore((state) => state.nextCursor);
+  const isFetchingMore = useChatStore((state) => state.isFetchingMore);
+  const fetchOlderMessages = useChatStore((state) => state.fetchOlderMessages);
   const readReceiptsEnabled = useReadReceiptsStore((state) => state.isEnabled);
   const { user } = useAuth();
   const bottomRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const observerRef = useRef<IntersectionObserver | null>(null);
+  const isInitialLoadRef = useRef(true);
+  const prevMessagesLengthRef = useRef(0);
 
   const activeConversation = conversations.find(c => String(c.id) === String(activeConversationId));
 
@@ -69,9 +75,58 @@ export const MessageList = ({ sendReadReceipt, sendDeleteMessage, onReply, sendR
     return () => { clearTimeout(timer); document.removeEventListener('mousedown', handler); };
   }, [quickReactMsgId]);
 
+  // Reset initial load flag when conversation changes
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    isInitialLoadRef.current = true;
+    prevMessagesLengthRef.current = 0;
+  }, [activeConversationId]);
+
+  // Scroll handling: auto-scroll on initial load and new messages
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const prevLength = prevMessagesLengthRef.current;
+    const currentLength = messages.length;
+
+    // Initial load: scroll to bottom
+    if (isInitialLoadRef.current && currentLength > 0) {
+      bottomRef.current?.scrollIntoView({ behavior: 'auto' });
+      isInitialLoadRef.current = false;
+      prevMessagesLengthRef.current = currentLength;
+      return;
+    }
+
+    // New message added at bottom (WebSocket): scroll to bottom
+    if (currentLength > prevLength && prevLength > 0) {
+      const diff = currentLength - prevLength;
+      // Check if messages were added at the end (new messages) vs prepended (older messages)
+      // If we're not fetching more, it's a new message
+      if (!isFetchingMore) {
+        bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+      }
+    }
+
+    prevMessagesLengthRef.current = currentLength;
+  }, [messages, isFetchingMore]);
+
+  // Scroll detection for loading older messages
+  const handleScroll = useCallback(async (e: React.UIEvent<HTMLDivElement>) => {
+    const container = e.currentTarget;
+    
+    // When near top (< 100px), fetch older messages
+    if (container.scrollTop < 100 && nextCursor && !isFetchingMore) {
+      const prevScrollHeight = container.scrollHeight;
+      
+      await fetchOlderMessages();
+      
+      // Preserve scroll position after prepending older messages
+      requestAnimationFrame(() => {
+        const newScrollHeight = container.scrollHeight;
+        container.scrollTop = newScrollHeight - prevScrollHeight;
+      });
+    }
+  }, [nextCursor, isFetchingMore, fetchOlderMessages]);
 
   const messageCallbackRef = useCallback((node: HTMLDivElement | null) => {
     if (!node || !activeConversationId || !user) return;
@@ -136,9 +191,25 @@ export const MessageList = ({ sendReadReceipt, sendDeleteMessage, onReply, sendR
 
   return (
     <div
+      ref={containerRef}
+      onScroll={handleScroll}
       className="flex-1 overflow-y-auto p-4 flex flex-col gap-4 bg-gray-50 h-full relative"
       onClick={() => { setActiveMenuId(null); setEmojiPickerMsgId(null); }}
     >
+      {/* Loading indicator for older messages */}
+      {isFetchingMore && (
+        <div className="flex justify-center py-2">
+          <Loader2 className="w-5 h-5 animate-spin text-gray-400" />
+        </div>
+      )}
+
+      {/* Show "no more messages" indicator when cursor is null and we have messages */}
+      {!nextCursor && messages.length > 0 && !isFetchingMore && (
+        <div className="text-center text-xs text-gray-400 py-2">
+          Beginning of conversation
+        </div>
+      )}
+
       {[...messages]
         .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
         .map((msg) => {

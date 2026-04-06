@@ -3,9 +3,9 @@
 import { usePresenceStore } from '@/store/usePresenceStore';
 
 export const PresenceToggle = () => {
-  const isHidden = usePresenceStore((s) => s.isHidden);
+  const isVisible = usePresenceStore((s) => s.isVisible);
   const isInitialized = usePresenceStore((s) => s.isInitialized);
-  const toggleHideOnline = usePresenceStore((s) => s.toggleHideOnline);
+  const toggleVisibility = usePresenceStore((s) => s.toggleVisibility);
 
   const handleToggle = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -15,8 +15,8 @@ export const PresenceToggle = () => {
       console.log('[PresenceToggle] Toggle blocked - not initialized');
       return;
     }
-    console.log('[PresenceToggle] Toggle clicked');
-    toggleHideOnline(); // No parameter - store handles the toggle internally
+    console.log('[PresenceToggle] Toggle clicked, setting visibility to:', !isVisible);
+    toggleVisibility(!isVisible);
   };
 
   return (
@@ -34,17 +34,17 @@ export const PresenceToggle = () => {
         <div className="relative pointer-events-none">
           <div 
             className={`w-9 h-5 rounded-full transition-colors ${
-              isHidden ? 'bg-gray-700' : 'bg-gray-300'
+              isVisible ? 'bg-green-500' : 'bg-gray-300'
             }`} 
           />
           <div 
             className={`absolute left-0.5 top-0.5 w-4 h-4 bg-white rounded-full shadow-sm transition-transform ${
-              isHidden ? 'translate-x-4' : 'translate-x-0'
+              isVisible ? 'translate-x-4' : 'translate-x-0'
             }`} 
           />
         </div>
         <span className="text-gray-600 font-medium pointer-events-none">
-          {isInitialized ? (isHidden ? 'Hidden' : 'Visible') : '...'}
+          {isInitialized ? (isVisible ? 'Visible' : 'Hidden') : '...'}
         </span>
       </button>
     </div>

@@ -8,6 +8,8 @@ interface ChatState {
   conversationIds: string[];
   activeConversationId: string | null;
   messages: Message[];
+  nextCursor: string | null;
+  isFetchingMore: boolean;
   socket: WebSocket | null;
   readReceiptsUserIds: number[];
   typingUsers: Record<string, NodeJS.Timeout>;
@@ -24,6 +26,7 @@ interface ChatState {
   resetChat: () => void;
   fetchConversations: () => Promise<void>;
   fetchMessages: (conversationId: string) => Promise<void>;
+  fetchOlderMessages: () => Promise<void>;
   updateMessageReactions: (messageId: string, reactions: { emoji: string; count: number; user_reacted: boolean }[]) => void;
   updateConversationOnSend: (message: any) => void;
   handleIncomingMessage: (payload: any, currentUserId?: string | number) => void;
@@ -48,6 +51,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   conversationIds: [],
   activeConversationId: null,
   messages: [],
+  nextCursor: null,
+  isFetchingMore: false,
   socket: null,
   readReceiptsUserIds: [],
   typingUsers: {},
@@ -71,6 +76,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setActiveConversationId: (id) => set((state) => ({
     activeConversationId: id,
     messages: [],
+    nextCursor: null,
+    isFetchingMore: false,
     // FIX: clear readReceiptsUserIds on every conversation switch.
     // Without this, receipts from the previous conversation bleed into
     // the new one and every message shows a blue double-tick immediately.
@@ -185,6 +192,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   resetChat: () => set({
     activeConversationId: null,
     messages: [],
+    nextCursor: null,
+    isFetchingMore: false,
     readReceiptsUserIds: [],
     typingUsers: {},
     socket: null
@@ -201,11 +210,49 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   fetchMessages: async (conversationId: string) => {
     try {
-      const data = await chatApi.getMessages(conversationId);
-      const messagesArray = Array.isArray(data) ? data : [];
-      get().setMessages([...messagesArray].reverse());
+      const response = await chatApi.getMessages(conversationId);
+      const messagesArray = Array.isArray(response.data) ? response.data : [];
+      
+      // API returns newest → oldest, reverse to oldest → newest for display
+      const normalizedMessages = normalizeMessages([...messagesArray].reverse());
+      
+      set({
+        messages: normalizedMessages,
+        nextCursor: response.next,
+      });
     } catch (error) {
       console.error('Failed to load messages:', error);
+    }
+  },
+
+  fetchOlderMessages: async () => {
+    const { nextCursor, isFetchingMore, messages } = get();
+
+    // Guard: no cursor or already fetching
+    if (!nextCursor || isFetchingMore) return;
+
+    set({ isFetchingMore: true });
+
+    try {
+      const response = await chatApi.getOlderMessages(nextCursor);
+      const newMessages = Array.isArray(response.data) ? response.data : [];
+
+      // Remove duplicates using existing message IDs
+      const existingIds = new Set(messages.map(m => String(m.id)));
+      const filtered = newMessages.filter(m => !existingIds.has(String(m.id)));
+
+      // Normalize and reverse (API returns newest → oldest)
+      const normalizedNew = normalizeMessages([...filtered].reverse());
+
+      set({
+        // Prepend older messages at the beginning
+        messages: [...normalizedNew, ...messages],
+        nextCursor: response.next,
+        isFetchingMore: false,
+      });
+    } catch (error) {
+      console.error('Failed to load older messages:', error);
+      set({ isFetchingMore: false });
     }
   },
 

@@ -8,11 +8,41 @@ export const chatApi = {
     return res.data.data || res.data;
   },
 
-  // Existing: Get paginated messages for a conversation
-  getMessages: async (conversationId: string, page: number = 1) => {
-    const res = await apiClient.get(`/api/chat/conversations/${conversationId}/messages/?page=${page}`);
-    const data = res.data;
-    return Array.isArray(data) ? data : (data?.data || data?.results || []);
+  // Existing: Get paginated messages for a conversation (cursor-based)
+  getMessages: async (conversationId: string): Promise<{
+    data: Message[];
+    next: string | null;
+  }> => {
+    const res = await apiClient.get(`/api/chat/conversations/${conversationId}/messages/`);
+    const responseData = res.data;
+    
+    // Handle different response formats
+    const messages = Array.isArray(responseData) 
+      ? responseData 
+      : (responseData?.data || responseData?.results || []);
+    
+    return {
+      data: messages,
+      next: responseData?.next || null,
+    };
+  },
+
+  // Fetch older messages using cursor URL
+  getOlderMessages: async (cursorUrl: string): Promise<{
+    data: Message[];
+    next: string | null;
+  }> => {
+    const res = await apiClient.get(cursorUrl);
+    const responseData = res.data;
+    
+    const messages = Array.isArray(responseData)
+      ? responseData
+      : (responseData?.data || responseData?.results || []);
+    
+    return {
+      data: messages,
+      next: responseData?.next || null,
+    };
   },
 
   // Existing: Mark a conversation as read
@@ -74,13 +104,13 @@ export const chatApi = {
     return res.data.online_users;
   },
 
-  getMyPresence: async (): Promise<{ is_online: boolean; is_hidden: boolean }> => {
+  getMyPresence: async (): Promise<{ is_online: boolean; is_visible: boolean }> => {
     const res = await apiClient.get('/api/chat/presence/me/');
     return res.data;
   },
 
-  toggleHideOnline: async (hideOnline: boolean) => {
-    const res = await apiClient.post('/api/chat/presence/toggle/', { hide_online: hideOnline });
+  togglePresence: async (isVisible: boolean): Promise<{ is_visible: boolean }> => {
+    const res = await apiClient.patch('/api/chat/presence/toggle/', { is_visible: isVisible });
     return res.data;
   },
 

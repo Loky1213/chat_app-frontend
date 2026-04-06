@@ -155,18 +155,11 @@ export const useGlobalWebSocket = () => {
 
           if (data.type === 'presence_update') {
             const { user_id, status } = data;
-            const currentUserId = usePresenceStore.getState().currentUserId;
             
-            console.log('[GlobalWS] Presence update received:', { user_id, status, currentUserId });
+            console.log('[GlobalWS] Presence update received:', { user_id, status });
             
-            // CRITICAL: Ignore presence updates for the CURRENT user.
-            // Your own presence is managed by the toggle + API, not by WebSocket broadcasts.
-            // Without this, WebSocket events can override your toggle state due to race conditions.
-            if (currentUserId && String(user_id) === String(currentUserId)) {
-              console.log('[GlobalWS] IGNORING presence update for self');
-              return;
-            }
-            
+            // RULES: Do NOT filter, debounce, or deduplicate
+            // Store is idempotent - handles duplicates safely
             if (status === 'user_online') {
               usePresenceStore.getState().setUserOnline(String(user_id));
             } else if (status === 'user_offline') {

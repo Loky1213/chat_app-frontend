@@ -17,7 +17,6 @@ export const ChatContainer = () => {
   const conversations = useChatStore((state) => state.conversations);
   const fetchConversations = useChatStore((state) => state.fetchConversations);
   const activeConversationId = useChatStore((state) => state.activeConversationId);
-  const onlineUsers = usePresenceStore((s) => s.onlineUsers);
   const [showGroupInfo, setShowGroupInfo] = useState(false);
   const { user: currentUser } = useAuth();
   const { sendMessage, sendDeleteMessage, sendTyping, sendReadReceipt, sendReaction } = useChatWebSocket(activeConversationId);
@@ -28,7 +27,6 @@ export const ChatContainer = () => {
   useEffect(() => {
     if (currentUser?.id) {
       const store = usePresenceStore.getState();
-      store.setCurrentUserId(currentUser.id);
       if (!store.isInitialized) {
         store.hydratePresence();
       }
@@ -44,22 +42,11 @@ export const ChatContainer = () => {
     ? activeConversation.participants.find(p => String(p.id) !== String(currentUser?.id))
     : null;
   
-  // Get current user's hidden status
-  const isCurrentUserHidden = usePresenceStore((s) => s.isHidden);
-  
-  // If current user is hidden, they can't see others' online status (WhatsApp-like privacy)
-  // Otherwise, check if the other participant is in the online list
-  const isOnline = !isCurrentUserHidden && otherParticipant 
-    ? onlineUsers.has(String(otherParticipant.id)) 
-    : false;
-    
-  // Debug: Log online status
-  console.log('[ChatContainer] Online check:', {
-    otherParticipantId: otherParticipant?.id,
-    isCurrentUserHidden,
-    onlineUsersArray: Array.from(onlineUsers),
-    isOnline
-  });
+  // CRITICAL: Use SELECTOR-based subscription for online status
+  // This ensures proper reactivity when onlineUsers Set changes
+  const isOnline = usePresenceStore(
+    (s) => otherParticipant ? s.onlineUsers.has(String(otherParticipant.id)) : false
+  );
 
   // Initialize conversation list on mount
   useEffect(() => {
@@ -129,4 +116,4 @@ export const ChatContainer = () => {
       </div>
     </div>
   );
-};
+};;
