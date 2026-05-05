@@ -9,10 +9,12 @@ let globalWsInstance: WebSocket | null = null;
 let globalWsRetryCount = 0;
 let globalWsReconnectTimeout: NodeJS.Timeout | null = null;
 let globalWsVisibilityHandler: (() => void) | null = null;
+let globalWsPingInterval: NodeJS.Timeout | null = null;
 let cachedCurrentUserId: string | undefined = undefined;
 // Track processed message IDs to prevent duplicate event handling
 const processedMessageIds = new Set<string>();
 const MAX_PROCESSED_IDS = 500; // Prevent memory leak
+const PING_INTERVAL_MS = 15000; // 25 seconds - keeps Redis presence alive
 
 const getToken = (): string | null => {
   if (typeof window === 'undefined') return null;
@@ -93,6 +95,17 @@ export const useGlobalWebSocket = () => {
         console.log('[GlobalWS] CONNECTED');
         globalWsRetryCount = 0;
 
+        // Start keep-alive ping to maintain Redis presence
+        if (globalWsPingInterval) {
+          clearInterval(globalWsPingInterval);
+        }
+        globalWsPingInterval = setInterval(() => {
+          if (socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({ action: 'ping' }));
+            console.log('[GlobalWS] Ping sent');
+          }
+        }, PING_INTERVAL_MS);
+
         const state = useChatStore.getState();
         if (state.conversations.length === 0) {
           state.fetchConversations();
@@ -105,6 +118,13 @@ export const useGlobalWebSocket = () => {
       socket.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
+          
+          // Handle pong response (debug)
+          if (data.type === 'pong') {
+            console.log('[GlobalWS] Pong received');
+            return;
+          }
+
           const eventType = data.type ? String(data.type).toUpperCase() : '';
           const messageObj = data.message || data.last_message || data;
           const effectiveChatId =
@@ -180,6 +200,12 @@ export const useGlobalWebSocket = () => {
         globalWsInstance = null;
         cachedCurrentUserId = undefined;
 
+        // Clear ping interval on disconnect
+        if (globalWsPingInterval) {
+          clearInterval(globalWsPingInterval);
+          globalWsPingInterval = null;
+        }
+
         if (event.code === 1008) {
           console.warn('[GlobalWS] Auth failed — not retrying');
           return;
@@ -221,6 +247,10 @@ export const useGlobalWebSocket = () => {
       if (globalWsReconnectTimeout) {
         clearTimeout(globalWsReconnectTimeout);
         globalWsReconnectTimeout = null;
+      }
+      if (globalWsPingInterval) {
+        clearInterval(globalWsPingInterval);
+        globalWsPingInterval = null;
       }
       // Do NOT close the global socket on unmount — it's shared across the app
     };
